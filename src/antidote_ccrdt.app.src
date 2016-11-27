@@ -1,0 +1,14 @@
+{application, antidote_ccrdt,
+ [
+  {description, "An Erlang antidote_ccrdt library"},
+  {vsn, "1"},
+  {modules, [
+             antidote_ccrdt
+            ]},
+  {registered, []},
+  {applications, [
+                  kernel,
+                  stdlib
+                 ]},
+  {env, []}
+ ]}.
