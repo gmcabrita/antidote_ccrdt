@@ -74,6 +74,7 @@ value({Top, _}) ->
 %% The second parameter is the top-k ccrdt although it isn't used.
 -spec downstream(topk_update(), any()) -> {ok, topk_effect()}.
 downstream({add, {Id, Score}}, _Top_k) ->
+    %% TODO: we're missing the precondition here.
     {ok, {add, {Id, Score}}}.
 
 %% @doc Update a `topk()'.
