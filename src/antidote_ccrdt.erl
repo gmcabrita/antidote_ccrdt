@@ -26,7 +26,8 @@
 -include("antidote_ccrdt.hrl").
 
 -define(CCRDTS, [antidote_ccrdt_average,
-                antidote_ccrdt_topk
+                antidote_ccrdt_topk,
+                antidote_ccrdt_topk_with_deletes
                ]).
 
 -export([is_type/1
