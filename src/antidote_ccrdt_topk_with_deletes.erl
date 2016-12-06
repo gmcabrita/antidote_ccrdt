@@ -79,7 +79,7 @@ new(Size) when is_integer(Size), Size > 0 ->
 %% @doc The single, total value of a `topk_with_deletes()'
 -spec value(topk_with_deletes()) -> list().
 value({External, _, _, _}) ->
-    List = maps:to_list(External),
+    List = maps:values(External),
     List1 = lists:sort(fun(X, Y) -> cmp(X,Y) end, List),
     lists:map(fun({Id, Score, _}) -> {Id, Score} end, List1).
 
