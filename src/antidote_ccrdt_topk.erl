@@ -50,7 +50,7 @@
 
 %% @doc Create a new, empty 'topk()'
 new() ->
-    new(25).
+    new(5).
 
 %% @doc Create a new, empty 'topk()'
 new(Size) when is_integer(Size), Size > 0 ->
@@ -162,7 +162,7 @@ min(Top) ->
 -ifdef(TEST).
 
 new_test() ->
-    ?assertEqual({#{}, 25}, new()).
+    ?assertEqual({#{}, 5}, new()).
 
 %% @doc test the correctness of `value()' function
 value_test() ->
