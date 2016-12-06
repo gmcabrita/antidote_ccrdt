@@ -72,10 +72,12 @@ value({Top, _}) ->
 %% @doc Generate a downstream operation.
 %% The first parameter is the tuple `{add, {Id, Score}}`.
 %% The second parameter is the top-k ccrdt although it isn't used.
--spec downstream(topk_update(), any()) -> {ok, topk_effect()}.
-downstream({add, {Id, Score}}, _Top_k) ->
-    %% TODO: we're missing the precondition here.
-    {ok, {add, {Id, Score}}}.
+-spec downstream(topk_update(), any()) -> {ok, topk_effect() | noop}.
+downstream({add, {Id, Score}}, Top) ->
+    case Top =/= add(Id, Score, Top) of
+        true -> {ok, {add, {Id, Score}}};
+        false -> {ok, noop}
+    end.
 
 %% @doc Update a `topk()'.
 %% The first argument is the tuple `{add, top_pair()}`.
@@ -109,7 +111,7 @@ is_operation(_) -> false.
 %% @doc Returns true if ?MODULE:downstream/2 needs the state of crdt
 %%      to generate downstream effect
 require_state_downstream(_) ->
-    false.
+    true.
 
 
 % Priv
@@ -167,13 +169,21 @@ value_test() ->
     Top = {#{1 => 2, 2 => 2}, 25},
     ?assertEqual([{2,2}, {1, 2}], value(Top)).
 
+downstream_add_test() ->
+    Top = {#{1 => 2, 2 => 2}, 2},
+    {ok, noop} = downstream({add, {1, 1}}, Top),
+    {ok, noop} = downstream({add, {1, 2}}, Top),
+    {ok, {add, {1, 3}}} = downstream({add, {1, 3}}, Top).
+
 %% @doc test the correctness of add.
 update_add_test() ->
     Top0 = new(2),
     {ok, Top1} = update({add, {1, 5}}, Top0),
-    {ok, Top2} = update({add, {2, 3}}, Top1),
-    {ok, Top3} = update({add, {3, 3}}, Top2),
-    ?assertEqual([{1, 5}, {3,3}], value(Top3)).
+    {ok, Top2} = update({add, {1, 4}}, Top1),
+    {ok, Top3} = update({add, {1, 5}}, Top2),
+    {ok, Top4} = update({add, {2, 3}}, Top3),
+    {ok, Top5} = update({add, {3, 3}}, Top4),
+    ?assertEqual([{1, 5}, {3,3}], value(Top5)).
 
 equal_test() ->
     Top1 = {#{1 => 2}, 5},
