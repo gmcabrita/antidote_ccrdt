@@ -46,7 +46,7 @@
 -type top_pair() :: {integer(), integer()}.
 -type topk() :: {map(), integer()}.
 -type topk_update() :: {add, top_pair()}.
--type topk_effect() :: {add, top_pair()}.
+-type topk_effect() :: {add, top_pair()} | {noop}.
 
 %% @doc Create a new, empty 'topk()'
 new() ->
@@ -72,7 +72,7 @@ value({Top, _}) ->
 %% @doc Generate a downstream operation.
 %% The first parameter is the tuple `{add, {Id, Score}}`.
 %% The second parameter is the top-k ccrdt although it isn't used.
--spec downstream(topk_update(), any()) -> {ok, topk_effect() | noop}.
+-spec downstream(topk_update(), any()) -> {ok, topk_effect()}.
 downstream({add, {Id, Score}}, Top) ->
     case Top =/= add(Id, Score, Top) of
         true -> {ok, {add, {Id, Score}}};
@@ -85,6 +85,8 @@ downstream({add, {Id, Score}}, Top) ->
 %%
 %% returns the updated `topk()'
 -spec update(topk_effect(), topk()) -> {ok, topk()}.
+update({noop}, TopK) ->
+    {ok, TopK};
 update({add, {Id, Score}}, TopK) when is_integer(Id), is_integer(Score) ->
     {ok, add(Id, Score, TopK)}.
 
