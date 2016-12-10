@@ -85,7 +85,7 @@ downstream({add, {Id, Score}}, Top) ->
 %%
 %% returns the updated `topk()'
 -spec update(topk_effect(), topk()) -> {ok, topk()}.
-update({noop}, TopK) ->
+update(noop, TopK) ->
     {ok, TopK};
 update({add, {Id, Score}}, TopK) when is_integer(Id), is_integer(Score) ->
     {ok, add(Id, Score, TopK)}.
