@@ -124,11 +124,11 @@ downstream({del, {Id, Actor}}, {External, Internal, _, _}) ->
 %%
 %% In the case where new operations must be propagated after the update a list
 %% of `topk_with_deletes_effect()' is also returned.
--spec update(topk_with_deletes_effect(), topk_with_deletes()) -> {ok, topk_with_deletes()} | {ok, {topk_with_deletes(), [topk_with_deletes_effect()]}}.
+-spec update(topk_with_deletes_effect(), topk_with_deletes()) -> {ok, topk_with_deletes()} | {ok, topk_with_deletes(), [topk_with_deletes_effect()]}.
 update({add, {Id, Score, Ts}}, TopK) when is_integer(Id), is_integer(Score) ->
-    {ok, add(Id, Score, Ts, TopK)};
+    add(Id, Score, Ts, TopK);
 update({del, {Id, Vv}}, TopK) when is_integer(Id), is_map(Vv) ->
-    {ok, del(Id, Vv, TopK)}.
+    del(Id, Vv, TopK).
 
 %% @doc Compare if two `topk_with_deletes()' are equal. Only returns `true()' if both
 %% the top-k contain the same external elements.
@@ -157,14 +157,14 @@ require_state_downstream(_) ->
     true.
 
 % Priv
--spec add(playerid(), score(), timestamp(), topk_with_deletes()) -> topk_with_deletes() | {topk_with_deletes(), [topk_with_deletes_effect()]}.
+-spec add(playerid(), score(), timestamp(), topk_with_deletes()) -> {ok, topk_with_deletes()} | {ok, topk_with_deletes(), [topk_with_deletes_effect()]}.
 add(Id, Score, Ts, {_External, Internal, Deletes, Size} = Top) ->
     Vv = case maps:is_key(Id, Deletes) of
         true -> maps:get(Id, Deletes);
         false -> #{}
     end,
     case vv_contains(Vv, Ts) of
-        true -> {Top, [{del, {Id, Vv}}]};
+        true -> {ok, Top, [{del, {Id, Vv}}]};
         false ->
             Elem = {Id, Score, Ts},
             Internal1 =
@@ -175,10 +175,10 @@ add(Id, Score, Ts, {_External, Internal, Deletes, Size} = Top) ->
                     false -> maps:put(Id, sets:from_list([Elem]), Internal)
                 end,
             External1 = max_k(Internal1, Size),
-            {External1, Internal1, Deletes, Size}
+            {ok, {External1, Internal1, Deletes, Size}}
     end.
 
--spec del(playerid(), vv(), topk_with_deletes()) -> topk_with_deletes() | {topk_with_deletes(), [topk_with_deletes_effect()]}.
+-spec del(playerid(), vv(), topk_with_deletes()) -> {ok, topk_with_deletes()} | {ok, topk_with_deletes(), [topk_with_deletes_effect()]}.
 del(Id, Vv, {External, Internal, Deletes, Size}) ->
     NewDeletes = merge_vv(Deletes, Id, Vv),
     %% delete stuff from internal
@@ -201,15 +201,15 @@ del(Id, Vv, {External, Internal, Deletes, Size}) ->
             SortedValues = lists:sort(fun(X, Y) -> cmp(X, Y) end, Values),
             SortedValues1 = lists:dropwhile(fun({I, _, _} = Elem) -> maps:is_key(I, TmpExternal) orelse cmp(Elem, Min) end, SortedValues),
             case SortedValues1 =:= [] of
-                true -> {TmpExternal, NewInternal, NewDeletes, Size};
+                true -> {ok, {TmpExternal, NewInternal, NewDeletes, Size}};
                 false ->
                     NewElem = hd(SortedValues1),
                     {I, _, _} = NewElem,
                     NewExternal = maps:put(I, NewElem, TmpExternal),
                     Top = {NewExternal, NewInternal, NewDeletes, Size},
-                    {Top, [{add, NewElem}]}
+                    {ok, Top, [{add, NewElem}]}
             end;
-        false -> {External, NewInternal, NewDeletes, Size}
+        false -> {ok, {External, NewInternal, NewDeletes, Size}}
     end.
 
 -spec max_k(internal_state(), size()) -> map().
@@ -347,13 +347,11 @@ mixed_test() ->
     ?assertEqual(Downstream5, Op5),
 
     {ok, DOp5} = Op5,
-    {ok, Top5} = update(DOp5, Top4),
-    ?assertEqual(Top5, {{#{Id2 => Elem2, Id4 => Elem4},
-                         #{Id2 => sets:from_list([Elem2]),
-                           Id4 => sets:from_list([Elem4])},
-                         #{Id1 => Vv}, Size
-                        },
-                        [DOp4]}).
+    {ok, Top5, [DOp4]} = update(DOp5, Top4),
+    ?assertEqual(Top5, {#{Id2 => Elem2, Id4 => Elem4},
+                        #{Id2 => sets:from_list([Elem2]),
+                          Id4 => sets:from_list([Elem4])},
+                        #{Id1 => Vv}, Size}).
 
 internal_delete_test() ->
     ?TIME:start_link(),
@@ -368,14 +366,12 @@ internal_delete_test() ->
                         #{1 => sets:from_list([{1, 42, 0}])},
                         #{2 => #{actor1 => sets:from_list([1])}},
                         1}),
-    {ok, Top4} = update({add, {2, 5, 1}}, Top3),
-    ?assertEqual(Top4, {{#{1 => {1, 42, 0}},
-                         #{1 => sets:from_list([{1, 42, 0}])},
-                         #{2 => #{actor1 => sets:from_list([1])}},
-                         1},
-                        [DelOp]}),
-    {ActualTop4, _} = Top4,
-    {ok, Top5} = update({del, {50, #{actor5 => sets:from_list([42])}}}, ActualTop4),
+    {ok, Top4, [DelOp]} = update({add, {2, 5, 1}}, Top3),
+    ?assertEqual(Top4, {#{1 => {1, 42, 0}},
+                        #{1 => sets:from_list([{1, 42, 0}])},
+                        #{2 => #{actor1 => sets:from_list([1])}},
+                        1}),
+    {ok, Top5} = update({del, {50, #{actor5 => sets:from_list([42])}}}, Top4),
     ?assertEqual(Top5, {#{1 => {1, 42, 0}},
                         #{1 => sets:from_list([{1, 42, 0}])},
                         #{2 => #{actor1 => sets:from_list([1])},
