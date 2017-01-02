@@ -57,7 +57,7 @@
 -type size() :: integer().
 -type playerid() :: integer().
 -type score() :: integer().
--type timestamp() :: integer(). %% erlang:monotonic_time()
+-type timestamp() :: integer(). %% erlang:timestamp()
 
 -type topk_with_deletes_pair() :: {playerid(), score(), timestamp()}.
 -type vv() :: map(). % #{actor() -> set of timestamp()}
@@ -86,7 +86,7 @@ value({External, _, _, _}) ->
 %% @doc Generate a downstream operation.
 -spec downstream(topk_with_deletes_update(), any()) -> {ok, topk_with_deletes_effect()} | {error, {invalid_id, playerid()}}.
 downstream({add, {Id, Score}}, {External, Internal, _, Size}) ->
-    Ts = ?TIME:monotonic_time(),
+    Ts = ?TIME:timestamp(),
     Elem = {Id, Score, Ts},
     TmpInternal =
         case maps:is_key(Id, Internal) of

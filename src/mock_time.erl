@@ -5,7 +5,7 @@
 %% api
 
 -export([start_link/0,
-         monotonic_time/0,
+         timestamp/0,
          get_time/0]).
 
 %% gen_server callbacks
@@ -21,8 +21,8 @@
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 
-monotonic_time() ->
-    gen_server:call(?MODULE, monotonic_time).
+timestamp() ->
+    gen_server:call(?MODULE, timestamp).
 
 get_time() ->
     gen_server:call(?MODULE, get_time).
@@ -32,7 +32,7 @@ init([]) ->
 
 %% gen_server callbacks
 
-handle_call(monotonic_time, _From, State) ->
+handle_call(timestamp, _From, State) ->
     {reply, State + 1, State + 1};
 handle_call(get_time, _From, State) ->
     {reply, State, State}.
