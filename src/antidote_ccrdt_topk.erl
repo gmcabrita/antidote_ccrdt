@@ -195,7 +195,7 @@ equal_test() ->
     ?assert(equal(Top2, Top3)).
 
 binary_test() ->
-    Top1 = {4, 1},
+    Top1 = {#{1 => 2}, 5},
     BinaryTop1 = to_binary(Top1),
     {ok, Top2} = from_binary(BinaryTop1),
     ?assert(equal(Top1, Top2)).
