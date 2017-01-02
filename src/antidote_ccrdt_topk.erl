@@ -152,7 +152,7 @@ add(Id, Score, {Top, Size}) ->
 cmp({Id1, Score1}, {Id2, Score2}) ->
     Score1 > Score2 orelse (Score1 == Score2 andalso Id1 > Id2).
 
--spec min(map()) -> boolean().
+-spec min(map()) -> top_pair().
 min(Top) ->
     List = maps:to_list(Top),
     SortedList = lists:sort(fun(X, Y) -> cmp(Y, X) end, List),
