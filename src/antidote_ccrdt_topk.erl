@@ -138,13 +138,13 @@ add(Id, Score, {Top, Size}) ->
                 false ->
                     Min = min(Top),
                     {MinId, _} = Min,
-                    case cmp({Id, Score}, min(Top)) of
+                    case cmp({Id, Score}, Min) of
                         true ->
                             T = maps:remove(MinId, Top),
                             maps:put(Id, Score, T);
                         false -> Top
                     end
-                end
+            end
         end,
     {NewTop, Size}.
 
