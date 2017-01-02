@@ -118,32 +118,25 @@ require_state_downstream(_) ->
 -spec add(integer(), pos_integer(), topk()) -> topk().
 add(Id, Score, {Top, Size}) ->
     CurrentSize = maps:size(Top),
-    NewTop = if
-        CurrentSize < Size ->
-            %% check if Id is already in or if the new Score is greater than the old one
-            case maps:is_key(Id, Top) andalso Score =< maps:get(Id, Top) of
-                true -> Top;
-                false -> maps:put(Id, Score, Top)
-            end;
-        CurrentSize == Size ->
-            %% check if Id exists and new pair is bigger, if Id doesnt exist check if it's bigger than the minimum
-            case maps:is_key(Id, Top) of
-                true ->
-                    case Score > maps:get(Id, Top) of
-                        true -> maps:put(Id, Score, Top);
-                        false -> Top
-                    end;
-                false ->
-                    Min = min(Top),
-                    {MinId, _} = Min,
-                    case cmp({Id, Score}, Min) of
-                        true ->
-                            T = maps:remove(MinId, Top),
-                            maps:put(Id, Score, T);
-                        false -> Top
-                    end
+    Replacing = case maps:is_key(Id, Top) of
+        true -> {Id, maps:get(Id, Top)};
+        false ->
+            case CurrentSize == Size of
+                true -> min(Top);
+                false -> nil
             end
-        end,
+    end,
+    NewTop = case CurrentSize < Size andalso Replacing =:= nil of
+        true -> maps:put(Id, Score, Top);
+        false ->
+            case cmp({Id, Score}, Replacing) of
+                true ->
+                    {ReplacingId, _} = Replacing,
+                    T = maps:remove(ReplacingId, Top),
+                    maps:put(Id, Score, T);
+                false -> Top
+            end
+    end,
     {NewTop, Size}.
 
 -spec cmp(top_pair(), top_pair()) -> boolean().
