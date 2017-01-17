@@ -64,7 +64,10 @@
 
 -type topk_with_deletes() :: {external_state(), internal_state(), deletes(), size()}.
 -type topk_with_deletes_update() :: {add, {playerid(), score()}} | {del, {playerid(), actor()}}.
--type topk_with_deletes_effect() :: {add, topk_with_deletes_pair()} | {del, {playerid(), vv()}}.
+-type topk_with_deletes_effect() :: {add, topk_with_deletes_pair()} |
+                                    {del, {playerid(), vv()}} |
+                                    {replicate_add, topk_with_deletes_pair()} |
+                                    {replicate_del, {playerid(), vv()}}.
 
 %% @doc Create a new, empty 'topk_with_deletes()'
 -spec new() -> topk_with_deletes().
@@ -95,9 +98,9 @@ downstream({add, {Id, Score}}, {External, Internal, _, Size}) ->
                 maps:put(Id, sets:add_element(Elem, Old), Internal);
             false -> maps:put(Id, sets:from_list([Elem]), Internal)
         end,
-    case External =:= max_k(TmpInternal, Size) of
+    case External =/= max_k(TmpInternal, Size) of
         true -> {ok, {add, {Id, Score, Ts}}};
-        false -> {ok, {add, {Id, Score, Ts}}} %% TODO: how do we make sure this only goes to N nodes??
+        false -> {ok, {replicate_add, {Id, Score, Ts}}}
     end;
 downstream({del, {Id, Actor}}, {External, Internal, _, _}) ->
     case maps:is_key(Id, Internal) of
@@ -115,7 +118,7 @@ downstream({del, {Id, Actor}}, {External, Internal, _, _}) ->
             end,
             case Tmp of
                 true -> {ok, {del, {Id, Vv}}};
-                false -> {ok, {del, {Id, Vv}}} %% TODO: how do we make sure this only goes to N nodes??
+                false -> {ok, {replicate_del, {Id, Vv}}}
             end
     end.
 
@@ -125,8 +128,12 @@ downstream({del, {Id, Actor}}, {External, Internal, _, _}) ->
 %% In the case where new operations must be propagated after the update a list
 %% of `topk_with_deletes_effect()' is also returned.
 -spec update(topk_with_deletes_effect(), topk_with_deletes()) -> {ok, topk_with_deletes()} | {ok, topk_with_deletes(), [topk_with_deletes_effect()]}.
+update({replicate_add, {Id, Score, Ts}}, TopK) when is_integer(Id), is_integer(Score) ->
+    add(Id, Score, Ts, TopK);
 update({add, {Id, Score, Ts}}, TopK) when is_integer(Id), is_integer(Score) ->
     add(Id, Score, Ts, TopK);
+update({replicate_del, {Id, Vv}}, TopK) when is_integer(Id), is_map(Vv) ->
+    del(Id, Vv, TopK);
 update({del, {Id, Vv}}, TopK) when is_integer(Id), is_map(Vv) ->
     del(Id, Vv, TopK).
 
@@ -311,7 +318,7 @@ mixed_test() ->
     Score3 = 0,
     Downstream3 = downstream({add, {Id3, Score3}}, Top2),
     Elem3 = {Id3, Score3, ?TIME:get_time()},
-    Op3 = {ok, {add, Elem3}},
+    Op3 = {ok, {replicate_add, Elem3}},
     ?assertEqual(Downstream3, Op3),
 
     {ok, DOp3} = Op3,
@@ -329,7 +336,7 @@ mixed_test() ->
     Score4 = 1,
     Downstream4 = downstream({add, {Id4, Score4}}, Top3),
     Elem4 = {Id4, Score4, ?TIME:get_time()},
-    Op4 = {ok, {add, Elem4}},
+    Op4 = {ok, {replicate_add, Elem4}},
     ?assertEqual(Downstream4, Op4),
 
     {ok, DOp4} = Op4,
@@ -347,7 +354,8 @@ mixed_test() ->
     ?assertEqual(Downstream5, Op5),
 
     {ok, DOp5} = Op5,
-    {ok, Top5, [DOp4]} = update(DOp5, Top4),
+    GeneratedDOp4 = {add, Elem4},
+    {ok, Top5, [GeneratedDOp4]} = update(DOp5, Top4),
     ?assertEqual(Top5, {#{Id2 => Elem2, Id4 => Elem4},
                         #{Id2 => sets:from_list([Elem2]),
                           Id4 => sets:from_list([Elem4])},
@@ -360,13 +368,14 @@ internal_delete_test() ->
     {ok, Top1} = update({add, {1, 42, 0}}, Top),
     {ok, Top2} = update({add, {2, 5, 1}}, Top1),
     {ok, DelOp} = downstream({del, {2, actor1}}, Top2),
-    ?assertEqual(DelOp, {del, {2, #{actor1 => sets:from_list([1])}}}),
+    ?assertEqual(DelOp, {replicate_del, {2, #{actor1 => sets:from_list([1])}}}),
     {ok, Top3} = update(DelOp, Top2),
     ?assertEqual(Top3, {#{1 => {1, 42, 0}},
                         #{1 => sets:from_list([{1, 42, 0}])},
                         #{2 => #{actor1 => sets:from_list([1])}},
                         1}),
-    {ok, Top4, [DelOp]} = update({add, {2, 5, 1}}, Top3),
+    GeneratedDelOp = {del, element(2, DelOp)},
+    {ok, Top4, [GeneratedDelOp]} = update({add, {2, 5, 1}}, Top3),
     ?assertEqual(Top4, {#{1 => {1, 42, 0}},
                         #{1 => sets:from_list([{1, 42, 0}])},
                         #{2 => #{actor1 => sets:from_list([1])}},
