@@ -63,7 +63,7 @@
 -type vv() :: map(). % #{actor() -> set of timestamp()}
 
 -type topk_with_deletes() :: {external_state(), internal_state(), deletes(), size()}.
--type topk_with_deletes_update() :: {add, {playerid(), score()}} | {del, {playerid(), actor()}}.
+-type topk_with_deletes_update() :: {add, {playerid(), score()}} | {add, {playerid(), score(), timestamp()}} | {del, {playerid(), actor()}} | {del, {playerid(), vv()}}.
 -type topk_with_deletes_effect() :: {add, topk_with_deletes_pair()} |
                                     {del, {playerid(), vv()}} |
                                     {replicate_add, topk_with_deletes_pair()} |
@@ -102,6 +102,8 @@ downstream({add, {Id, Score}}, {External, Internal, _, Size}) ->
         true -> {ok, {add, {Id, Score, Ts}}};
         false -> {ok, {replicate_add, {Id, Score, Ts}}}
     end;
+downstream({add, {Id, Score, Ts}}, _) -> {ok, {add, {Id, Score, Ts}}};
+downstream({del, {Id, Vv}}, _) when is_map(Vv) -> {ok, {del, {Id, Vv}}};
 downstream({del, {Id, Actor}}, {External, Internal, _, _}) ->
     case maps:is_key(Id, Internal) of
         false -> {error, {invalid_id, Id}};
@@ -155,6 +157,8 @@ from_binary(Bin) ->
 %%      that Operation is supported by this particular CCRDT.
 -spec is_operation(term()) -> boolean().
 is_operation({add, {Id, Score}}) when is_integer(Id), is_integer(Score) -> true;
+is_operation({add, {Id, Score, _Ts}}) when is_integer(Id), is_integer(Score) -> true;
+is_operation({del, {Id, Vv}}) when is_integer(Id), is_map(Vv) -> true;
 is_operation({del, {Id, _Actor}}) when is_integer(Id) -> true;
 is_operation(_) -> false.
 
