@@ -169,7 +169,7 @@ require_state_downstream(_) ->
 
 % Priv
 -spec add(playerid(), score(), timestamp(), topk_with_deletes()) -> {ok, topk_with_deletes()} | {ok, topk_with_deletes(), [topk_with_deletes_effect()]}.
-add(Id, Score, Ts, {_External, Internal, Deletes, Size} = Top) ->
+add(Id, Score, Ts, {External, Internal, Deletes, Size} = Top) ->
     Vv = case maps:is_key(Id, Deletes) of
         true -> maps:get(Id, Deletes);
         false -> #{}
@@ -185,7 +185,10 @@ add(Id, Score, Ts, {_External, Internal, Deletes, Size} = Top) ->
                         maps:put(Id, sets:add_element(Elem, Old), Internal);
                     false -> maps:put(Id, sets:from_list([Elem]), Internal)
                 end,
-            External1 = max_k(Internal1, Size),
+            External1 = case Internal1 == Internal of
+                true -> External;
+                false -> max_k(Internal1, Size)
+            end,
             {ok, {External1, Internal1, Deletes, Size}}
     end.
 
