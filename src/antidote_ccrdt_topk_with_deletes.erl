@@ -47,6 +47,8 @@
           to_binary/1,
           from_binary/1,
           is_operation/1,
+          can_compact/2,
+          compact_ops/2,
           require_state_downstream/1
         ]).
 
@@ -161,6 +163,31 @@ is_operation({add, {Id, Score, _Ts}}) when is_integer(Id), is_integer(Score) -> 
 is_operation({del, {Id, Vv}}) when is_integer(Id), is_map(Vv) -> true;
 is_operation({del, {Id, _Actor}}) when is_integer(Id) -> true;
 is_operation(_) -> false.
+
+-spec can_compact(topk_with_deletes_effect(), topk_with_deletes_effect()) -> boolean().
+can_compact({add, {Id1, _, _}}, {add, {Id2, _, _}}) ->
+    Id1 == Id2;
+can_compact({add, {Id1, _, Ts}}, {del, {Id2, Vv}}) ->
+    Id1 == Id2 andalso vv_contains(Vv, Ts);
+can_compact({del, {Id1, Vv}}, {add, {Id2, _, Ts}}) ->
+    Id1 == Id2 andalso vv_contains(Vv, Ts);
+can_compact({del, {Id1, _}}, {del, {Id2, _}}) ->
+    Id1 == Id2;
+can_compact(_, _) ->
+    false.
+
+-spec compact_ops(topk_with_deletes_effect(), topk_with_deletes_effect()) -> topk_with_deletes_effect().
+compact_ops({add, {Id1, Score1, Ts1}}, {add, {Id2, Score2, Ts2}}) ->
+    case Score1 > Score2 of
+        true -> {add, {Id1, Score1, Ts1}};
+        false -> {add, {Id2, Score2, Ts2}}
+    end;
+compact_ops({add, _}, {del, {Id2, Vv}}) ->
+    {del, {Id2, Vv}};
+compact_ops({del, {Id1, Vv}}, {add, _}) ->
+    {del, {Id1, Vv}};
+compact_ops({del, _}, {del, {Id2, Vv2}}) ->
+    {del, {Id2, Vv2}}.
 
 %% @doc Returns true if ?MODULE:downstream/2 needs the state of crdt
 %%      to generate downstream effect

@@ -39,6 +39,8 @@
 -callback update(effect(), ccrdt()) ->  {ok, ccrdt()}.
 -callback require_state_downstream(update()) -> boolean().
 -callback is_operation(update()) ->  boolean(). %% Type check
+-callback can_compact(effect(), effect()) -> boolean().
+-callback compact_ops(effect(), effect()) -> effect().
 
 -callback equal(ccrdt(), ccrdt()) -> boolean().
 -callback to_binary(ccrdt()) -> binary().

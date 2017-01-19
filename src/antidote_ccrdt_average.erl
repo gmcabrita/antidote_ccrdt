@@ -39,6 +39,8 @@
           to_binary/1,
           from_binary/1,
           is_operation/1,
+          can_compact/2,
+          compact_ops/2,
           require_state_downstream/1
         ]).
 
@@ -105,6 +107,12 @@ from_binary(Bin) ->
 is_operation({add, {Value, N}}) when is_integer(Value), is_integer(N) -> true;
 is_operation({add, Value}) when is_integer(Value) -> true;
 is_operation(_) -> false.
+
+-spec can_compact(average_effect(), average_effect()) -> boolean().
+can_compact({add, {_, _}}, {add, {_, _}}) -> true.
+
+-spec compact_ops(average_effect(), average_effect()) -> average_effect().
+compact_ops({add, {V1, N1}}, {add, {V2, N2}}) -> {add, {V1 + V2, N1 + N2}}.
 
 %% @doc Returns true if ?MODULE:downstream/2 needs the state of crdt
 %%      to generate downstream effect
