@@ -34,8 +34,10 @@
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -define(TIME, mock_time).
+-define(DC_META_DATA, mock_dc_meta_data).
 -else.
 -define(TIME, erlang).
+-define(DC_META_DATA, dc_meta_data_utilities).
 -endif.
 
 -export([ new/0,
@@ -54,18 +56,18 @@
 
 -type external_state() :: map().
 -type internal_state() :: map().
--type deletes() :: map(). % #{playerid() -> #{actor() -> set of timestamp()}}
+-type deletes() :: map(). % #{playerid() -> #{actor() -> timestamp()}}
 
 -type size() :: integer().
 -type playerid() :: integer().
 -type score() :: integer().
--type timestamp() :: integer(). %% erlang:timestamp()
+-type timestamp() :: {dcid(), integer()}. %% erlang:timestamp()
 
 -type topk_with_deletes_pair() :: {playerid(), score(), timestamp()}.
--type vv() :: map(). % #{actor() -> set of timestamp()}
+-type vv() :: map(). % #{dcid() -> timestamp()}
 
 -type topk_with_deletes() :: {external_state(), internal_state(), deletes(), size()}.
--type topk_with_deletes_update() :: {add, {playerid(), score()}} | {add, {playerid(), score(), timestamp()}} | {del, {playerid(), actor()}} | {del, {playerid(), vv()}}.
+-type topk_with_deletes_update() :: {add, {playerid(), score()}} | {add, {playerid(), score(), timestamp()}} | {del, playerid()} | {del, {playerid(), vv()}}.
 -type topk_with_deletes_effect() :: {add, topk_with_deletes_pair()} |
                                     {del, {playerid(), vv()}} |
                                     {replicate_add, topk_with_deletes_pair()} |
@@ -91,7 +93,8 @@ value({External, _, _, _}) ->
 %% @doc Generate a downstream operation.
 -spec downstream(topk_with_deletes_update(), any()) -> {ok, topk_with_deletes_effect()} | {error, {invalid_id, playerid()}}.
 downstream({add, {Id, Score}}, {External, Internal, _, Size}) ->
-    Ts = ?TIME:timestamp(),
+    DcId = ?DC_META_DATA:get_my_dc_id(),
+    Ts = {DcId, ?TIME:timestamp()},
     Elem = {Id, Score, Ts},
     TmpInternal =
         case maps:is_key(Id, Internal) of
@@ -106,18 +109,28 @@ downstream({add, {Id, Score}}, {External, Internal, _, Size}) ->
     end;
 downstream({add, {Id, Score, Ts}}, _) -> {ok, {add, {Id, Score, Ts}}};
 downstream({del, {Id, Vv}}, _) when is_map(Vv) -> {ok, {del, {Id, Vv}}};
-downstream({del, {Id, Actor}}, {External, Internal, _, _}) ->
+downstream({del, Id}, {External, Internal, Deletes, _}) ->
     case maps:is_key(Id, Internal) of
         false -> {error, {invalid_id, Id}};
         true ->
             Elems = sets:to_list(maps:get(Id, Internal)),
-            Ts1 = lists:map(fun({_,_,T}) -> T end, Elems),
-            Ts2 = sets:from_list(Ts1),
-            Vv = #{Actor => Ts2},
+            % grab the known version vector for the given Id (if it exists)
+            KnownVv = case maps:is_key(Id, Deletes) of
+                true -> maps:get(Id, Deletes);
+                false -> #{}
+            end,
+            % update the version vector
+            Vv = lists:foldl(fun({_, _, {DcId, Ts}}, Acc) ->
+                Max = case maps:is_key(DcId, Acc) of
+                    true -> max_timestamp(maps:get(DcId, Acc), {DcId, Ts});
+                    false -> {DcId, Ts}
+                end,
+                maps:put(DcId, Max, Acc)
+            end, KnownVv, Elems),
             Tmp = case maps:is_key(Id, External) of
                 true ->
                     ElemTs = element(3, maps:get(Id, External)),
-                    sets:is_element(ElemTs, Ts2);
+                    vv_contains(Vv, ElemTs);
                 false -> false
             end,
             case Tmp of
@@ -161,7 +174,7 @@ from_binary(Bin) ->
 is_operation({add, {Id, Score}}) when is_integer(Id), is_integer(Score) -> true;
 is_operation({add, {Id, Score, _Ts}}) when is_integer(Id), is_integer(Score) -> true;
 is_operation({del, {Id, Vv}}) when is_integer(Id), is_map(Vv) -> true;
-is_operation({del, {Id, _Actor}}) when is_integer(Id) -> true;
+is_operation({del, Id}) when is_integer(Id) -> true;
 is_operation(_) -> false.
 
 -spec can_compact(topk_with_deletes_effect(), topk_with_deletes_effect()) -> boolean().
@@ -187,6 +200,7 @@ compact_ops({add, _}, {del, {Id2, Vv}}) ->
 compact_ops({del, {Id1, Vv}}, {add, _}) ->
     {del, {Id1, Vv}};
 compact_ops({del, _}, {del, {Id2, Vv2}}) ->
+    % TODO: @gmcabrita it may be necessary to run max() for every element in the version vector and do a merge.
     {del, {Id2, Vv2}}.
 
 %% @doc Returns true if ?MODULE:downstream/2 needs the state of crdt
@@ -275,32 +289,40 @@ grab(Result, [{Id, _, _} = H | T], Size) ->
 
 -spec vv_contains(vv(), timestamp()) -> boolean().
 vv_contains(Vv, _) when map_size(Vv) == 0 -> false;
-vv_contains(Vv, Ts) ->
-    ListOfSets = maps:values(Vv),
-    Set = sets:union(ListOfSets),
-    sets:is_element(Ts, Set).
+vv_contains(Vv, {DcId, Ts1}) ->
+    case maps:is_key(DcId, Vv) of
+        true ->
+            {_, Ts2} = maps:get(DcId, Vv),
+            Ts2 >= Ts1;
+        false -> false
+    end.
 
 -spec merge_vv(deletes(), playerid(), vv()) -> deletes().
 merge_vv(Deletes, Id, Vv) ->
-    case maps:is_key(Id, Deletes) of
+    NewVv = case maps:is_key(Id, Deletes) of
         true ->
             OldVv = maps:get(Id, Deletes),
-            Fun = fun(K, V, Acc) ->
-                case maps:is_key(K, Acc) of
-                    true ->
-                        NewV = sets:union(maps:get(K, Acc), V),
-                        maps:put(K, NewV, Acc);
-                    false -> maps:put(K, V, Acc)
-                end
-            end,
-            NewVv = maps:fold(Fun, OldVv, Vv),
-            maps:put(Id, NewVv, Deletes);
-        false -> maps:put(Id, Vv, Deletes)
-    end.
+            maps:fold(fun(_, {DcId, Ts}, Acc) ->
+                Max = case maps:is_key(DcId, Acc) of
+                    true -> max_timestamp(maps:get(DcId, Acc), {DcId, Ts});
+                    false -> {DcId, Ts}
+                end,
+                maps:put(DcId, Max, Acc)
+            end, OldVv, Vv);
+        false -> Vv
+    end,
+    maps:put(Id, NewVv, Deletes).
 
 -spec cmp(topk_with_deletes_pair(), topk_with_deletes_pair()) -> boolean().
 cmp({Id1, Score1, _}, {Id2, Score2, _}) ->
     Score1 > Score2 orelse (Score1 == Score2 andalso Id1 > Id2).
+
+-spec max_timestamp(timestamp(), timestamp()) -> timestamp().
+max_timestamp({DcId1, T1}, {DcId2, T2}) ->
+    case T1 > T2 of
+        true -> {DcId1, T1};
+        false -> {DcId2, T2}
+    end.
 
 -spec min(map()) -> topk_with_deletes_pair().
 min(Top) ->
@@ -317,14 +339,16 @@ min(Top) ->
 %% TODO: simplify tests
 mixed_test() ->
     ?TIME:start_link(),
+    ?DC_META_DATA:start_link(),
     Size = 2,
     Top = new(Size),
+    MyDcId = ?DC_META_DATA:get_my_dc_id(),
     ?assertEqual(Top, {#{}, #{}, #{}, Size}),
 
     Id1 = 1,
     Score1 = 2,
     Downstream1 = downstream({add, {Id1, Score1}}, Top),
-    Elem1 = {Id1, Score1, ?TIME:get_time()},
+    Elem1 = {Id1, Score1, {MyDcId, ?TIME:get_time()}},
     Op1 = {ok, {add, Elem1}},
     ?assertEqual(Downstream1, Op1),
 
@@ -337,7 +361,7 @@ mixed_test() ->
     Id2 = 2,
     Score2 = 2,
     Downstream2 = downstream({add, {Id2, Score2}}, Top1),
-    Elem2 = {Id2, Score2, ?TIME:get_time()},
+    Elem2 = {Id2, Score2, {MyDcId, ?TIME:get_time()}},
     Op2 = {ok, {add, Elem2}},
     ?assertEqual(Downstream2, Op2),
 
@@ -351,7 +375,7 @@ mixed_test() ->
     Id3 = 1,
     Score3 = 0,
     Downstream3 = downstream({add, {Id3, Score3}}, Top2),
-    Elem3 = {Id3, Score3, ?TIME:get_time()},
+    Elem3 = {Id3, Score3, {MyDcId, ?TIME:get_time()}},
     Op3 = {ok, {replicate_add, Elem3}},
     ?assertEqual(Downstream3, Op3),
 
@@ -363,13 +387,13 @@ mixed_test() ->
                         #{}, Size}),
 
     NonId = 100,
-    ?assertEqual(downstream({del, {NonId, actor1}}, Top3),
+    ?assertEqual(downstream({del, NonId}, Top3),
                             {error, {invalid_id, NonId}}),
 
     Id4 = 100,
     Score4 = 1,
     Downstream4 = downstream({add, {Id4, Score4}}, Top3),
-    Elem4 = {Id4, Score4, ?TIME:get_time()},
+    Elem4 = {Id4, Score4, {MyDcId, ?TIME:get_time()}},
     Op4 = {ok, {replicate_add, Elem4}},
     ?assertEqual(Downstream4, Op4),
 
@@ -382,8 +406,8 @@ mixed_test() ->
                         #{}, Size}),
 
     Id5 = 1,
-    Downstream5 = downstream({del, {Id5, actor1}}, Top4),
-    Vv = #{actor1 => sets:from_list([element(3, Elem1), element(3, Elem3)])},
+    Downstream5 = downstream({del, Id5}, Top4),
+    Vv = #{MyDcId => max_timestamp(element(3, Elem1), element(3, Elem3))},
     Op5 = {ok, {del, {Id5, Vv}}},
     ?assertEqual(Downstream5, Op5),
 
@@ -397,28 +421,30 @@ mixed_test() ->
 
 internal_delete_test() ->
     ?TIME:start_link(),
+    ?DC_META_DATA:start_link(),
     Size = 1,
     Top = new(Size),
-    {ok, Top1} = update({add, {1, 42, 0}}, Top),
-    {ok, Top2} = update({add, {2, 5, 1}}, Top1),
-    {ok, DelOp} = downstream({del, {2, actor1}}, Top2),
-    ?assertEqual(DelOp, {replicate_del, {2, #{actor1 => sets:from_list([1])}}}),
+    MyDcId = ?DC_META_DATA:get_my_dc_id(),
+    {ok, Top1} = update({add, {1, 42, {MyDcId, 0}}}, Top),
+    {ok, Top2} = update({add, {2, 5, {MyDcId, 1}}}, Top1),
+    {ok, DelOp} = downstream({del, 2}, Top2),
+    ?assertEqual(DelOp, {replicate_del, {2, #{MyDcId => {MyDcId, 1}}}}),
     {ok, Top3} = update(DelOp, Top2),
-    ?assertEqual(Top3, {#{1 => {1, 42, 0}},
-                        #{1 => sets:from_list([{1, 42, 0}])},
-                        #{2 => #{actor1 => sets:from_list([1])}},
+    ?assertEqual(Top3, {#{1 => {1, 42, {MyDcId, 0}}},
+                        #{1 => sets:from_list([{1, 42, {MyDcId, 0}}])},
+                        #{2 => #{MyDcId => {MyDcId, 1}}},
                         1}),
     GeneratedDelOp = {del, element(2, DelOp)},
-    {ok, Top4, [GeneratedDelOp]} = update({add, {2, 5, 1}}, Top3),
-    ?assertEqual(Top4, {#{1 => {1, 42, 0}},
-                        #{1 => sets:from_list([{1, 42, 0}])},
-                        #{2 => #{actor1 => sets:from_list([1])}},
+    {ok, Top4, [GeneratedDelOp]} = update({add, {2, 5, {MyDcId, 1}}}, Top3),
+    ?assertEqual(Top4, {#{1 => {1, 42, {MyDcId, 0}}},
+                        #{1 => sets:from_list([{1, 42, {MyDcId, 0}}])},
+                        #{2 => #{MyDcId => {MyDcId, 1}}},
                         1}),
-    {ok, Top5} = update({del, {50, #{actor5 => sets:from_list([42])}}}, Top4),
-    ?assertEqual(Top5, {#{1 => {1, 42, 0}},
-                        #{1 => sets:from_list([{1, 42, 0}])},
-                        #{2 => #{actor1 => sets:from_list([1])},
-                          50 => #{actor5 => sets:from_list([42])}},
+    {ok, Top5} = update({del, {50, #{MyDcId => {MyDcId, 42}}}}, Top4),
+    ?assertEqual(Top5, {#{1 => {1, 42, {MyDcId, 0}}},
+                        #{1 => sets:from_list([{1, 42, {MyDcId, 0}}])},
+                        #{2 => #{MyDcId => {MyDcId, 1}},
+                          50 => #{MyDcId => {MyDcId, 42}}},
                         1}).
 
 grab_test() ->
@@ -433,29 +459,27 @@ grab_test() ->
                  #{6 => {6, 3, 1}, 5 => {5, 2, 3}}).
 
 vv_contains_test() ->
-    ?assertEqual(vv_contains(#{1 => sets:from_list([1, 2, 3])}, 0), false),
-    ?assertEqual(vv_contains(#{1 => sets:from_list([1, 2, 3])}, 1), true),
-    ?assertEqual(vv_contains(#{1 => sets:from_list([1, 2, 3]),
-                               2 => sets:from_list([4, 5])}, 0), false),
-    ?assertEqual(vv_contains(#{1 => sets:from_list([1, 2, 3]),
-                               2 => sets:from_list([4, 5])}, 1), true),
-    ?assertEqual(vv_contains(#{1 => sets:from_list([1, 2, 3]),
-                               2 => sets:from_list([4, 5])}, 4), true),
-    ?assertEqual(vv_contains(#{1 => sets:from_list([1, 2, 3]),
-                               2 => sets:from_list([3, 5])}, 3), true).
+    ?assertEqual(vv_contains(#{a => {a, 0}}, {a, 1}), false),
+    ?assertEqual(vv_contains(#{a => {a, 3}}, {a, 1}), true),
+    ?assertEqual(vv_contains(#{a => {a, 3},
+                               b => {b, 5}}, {b, 6}), false),
+    ?assertEqual(vv_contains(#{a => {a, 3},
+                               b => {b, 5}}, {b, 1}), true),
+    ?assertEqual(vv_contains(#{a => {a, 3},
+                               b => {b, 5}}, {c, 0}), false).
 
 simple_merge_vv_test() ->
     ?assertEqual(merge_vv(#{},
                           1,
-                        #{a => sets:from_list([1,2,3])}),
-                 #{1 => #{a => sets:from_list([1,2,3])}}),
-    ?assertEqual(merge_vv(#{1 => #{a => sets:from_list([1,2,3])}},
+                        #{a => {a, 3}}),
+                 #{1 => #{a => {a, 3}}}),
+    ?assertEqual(merge_vv(#{1 => #{a => {a, 3}}},
                           1,
-                          #{a => sets:from_list([1,2,3])}),
-                 #{1 => #{a => sets:from_list([1,2,3])}}),
-    ?assertEqual(merge_vv(#{1 => #{a => sets:from_list([1,2,3])}},
+                          #{a => {a, 3}}),
+                 #{1 => #{a => {a, 3}}}),
+    ?assertEqual(merge_vv(#{1 => #{a => {a, 3}}},
                           1,
-                          #{a => sets:from_list([4,3,5])}),
-                 #{1 => #{a => sets:from_list([1,2,3,4,5])}}).
+                          #{a => {a, 5}}),
+                 #{1 => #{a => {a, 5}}}).
 
 -endif.

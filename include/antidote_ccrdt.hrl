@@ -1,3 +1,4 @@
+-type dcid() :: term().
 -type ccrdt() :: term().
 -type actor() :: term().
 -type update() :: {atom(), term()}.
