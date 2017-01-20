@@ -314,6 +314,8 @@ merge_vv(Deletes, Id, Vv) ->
     maps:put(Id, NewVv, Deletes).
 
 -spec cmp(topk_with_deletes_pair(), topk_with_deletes_pair()) -> boolean().
+cmp(nil, _) -> false;
+cmp(_, nil) -> true;
 cmp({Id1, Score1, _}, {Id2, Score2, _}) ->
     Score1 > Score2 orelse (Score1 == Score2 andalso Id1 > Id2).
 
@@ -324,17 +326,19 @@ max_timestamp({DcId1, T1}, {DcId2, T2}) ->
         false -> {DcId2, T2}
     end.
 
--spec min(map()) -> topk_with_deletes_pair().
+-spec min(map()) -> topk_with_deletes_pair() | nil.
 min(Top) ->
     List = maps:values(Top),
     SortedList = lists:sort(fun(X, Y) -> cmp(Y, X) end, List),
-    hd(SortedList).
+    case SortedList of
+        [] -> nil;
+        _ -> hd(SortedList)
+    end.
 
 %% ===================================================================
 %% EUnit tests
 %% ===================================================================
 -ifdef(TEST).
-
 
 %% TODO: simplify tests
 mixed_test() ->
@@ -481,5 +485,28 @@ simple_merge_vv_test() ->
                           1,
                           #{a => {a, 5}}),
                  #{1 => #{a => {a, 5}}}).
+
+delete_semantics_test() ->
+    ?TIME:start_link(),
+    ?DC_META_DATA:start_link(),
+    Dc1 = ?DC_META_DATA:get_my_dc_id(),
+    Dc1Top1 = new(1),
+    Dc2Top1 = new(1),
+    Id = 1,
+    Score1 = 45,
+    Score2 = 50,
+    {ok, AddOp} = downstream({add, {Id, Score1}}, Dc1Top1),
+    {ok, Dc1Top2} = update(AddOp, Dc1Top1),
+    {ok, AddOp2} = downstream({add, {Id, Score2}}, Dc1Top1),
+    ?assertEqual(AddOp2, {add, {Id, Score2, {Dc1, ?TIME:get_time()}}}),
+    {ok, Dc1Top3} = update(AddOp2, Dc1Top2),
+    {ok, Dc2Top2} = update(AddOp2, Dc2Top1),
+    {ok, DelOp} = downstream({del, Id}, Dc2Top2),
+    {ok, Dc2Top3} = update(DelOp, Dc2Top2),
+    {ok, Dc1Top4} = update(DelOp, Dc1Top3),
+    ?assertEqual(Dc1Top4, {#{}, #{}, #{Id => #{Dc1 => {Dc1, ?TIME:get_time()}}}, 1}),
+    ?assertEqual(Dc1Top4, Dc2Top3),
+    {ok, Dc2Top4, [DelOp]} = update(AddOp, Dc2Top3),
+    ?assertEqual(Dc2Top4, Dc2Top3).
 
 -endif.
