@@ -178,16 +178,24 @@ is_operation({del, Id}) when is_integer(Id) -> true;
 is_operation(_) -> false.
 
 -spec can_compact(topk_with_deletes_effect(), topk_with_deletes_effect()) -> boolean().
-can_compact({add, {Id1, _, _}}, {add, {Id2, _, _}}) ->
-    Id1 == Id2;
-can_compact({add, {Id1, _, Ts}}, {del, {Id2, Vv}}) ->
-    Id1 == Id2 andalso vv_contains(Vv, Ts);
-can_compact({del, {Id1, Vv}}, {add, {Id2, _, Ts}}) ->
-    Id1 == Id2 andalso vv_contains(Vv, Ts);
-can_compact({del, {Id1, _}}, {del, {Id2, _}}) ->
-    Id1 == Id2;
-can_compact(_, _) ->
-    false.
+can_compact({add, {Id1, _, _}}, {add, {Id2, _, _}}) -> Id1 == Id2;
+
+can_compact({replicate_add, {Id1, _, Ts}}, {replicate_del, {Id2, Vv}}) -> Id1 == Id2 andalso vv_contains(Vv, Ts);
+can_compact({replicate_add, {Id1, _, Ts}}, {del, {Id2, Vv}}) -> Id1 == Id2 andalso vv_contains(Vv, Ts);
+can_compact({add, {Id1, _, Ts}}, {replicate_del, {Id2, Vv}}) -> Id1 == Id2 andalso vv_contains(Vv, Ts);
+can_compact({add, {Id1, _, Ts}}, {del, {Id2, Vv}}) -> Id1 == Id2 andalso vv_contains(Vv, Ts);
+
+can_compact({replicate_del, {Id1, Vv}}, {replicate_add, {Id2, _, Ts}}) -> Id1 == Id2 andalso vv_contains(Vv, Ts);
+can_compact({replicate_del, {Id1, Vv}}, {add, {Id2, _, Ts}}) -> Id1 == Id2 andalso vv_contains(Vv, Ts);
+can_compact({del, {Id1, Vv}}, {replicate_add, {Id2, _, Ts}}) -> Id1 == Id2 andalso vv_contains(Vv, Ts);
+can_compact({del, {Id1, Vv}}, {add, {Id2, _, Ts}}) -> Id1 == Id2 andalso vv_contains(Vv, Ts);
+
+can_compact({replicate_del, {Id1, _}}, {replicate_del, {Id2, _}}) -> Id1 == Id2;
+can_compact({replicate_del, {Id1, _}}, {del, {Id2, _}}) -> Id1 == Id2;
+can_compact({del, {Id1, _}}, {replicate_del, {Id2, _}}) -> Id1 == Id2;
+can_compact({del, {Id1, _}}, {del, {Id2, _}}) -> Id1 == Id2;
+
+can_compact(_, _) -> false.
 
 -spec compact_ops(topk_with_deletes_effect(), topk_with_deletes_effect()) -> topk_with_deletes_effect().
 compact_ops({add, {Id1, Score1, Ts1}}, {add, {Id2, Score2, Ts2}}) ->
@@ -195,13 +203,33 @@ compact_ops({add, {Id1, Score1, Ts1}}, {add, {Id2, Score2, Ts2}}) ->
         true -> {add, {Id1, Score1, Ts1}};
         false -> {add, {Id2, Score2, Ts2}}
     end;
+
+compact_ops({replicate_add, _}, {replicate_del, {Id2, Vv}}) ->
+    {replicate_del, {Id2, Vv}};
+compact_ops({replicate_add, _}, {del, {Id2, Vv}}) ->
+    {del, {Id2, Vv}};
+compact_ops({add, _}, {replicate_del, {Id2, Vv}}) ->
+    {replicate_del, {Id2, Vv}};
 compact_ops({add, _}, {del, {Id2, Vv}}) ->
     {del, {Id2, Vv}};
+
+compact_ops({replicate_del, {Id1, Vv}}, {replicate_add, _}) ->
+    {replicate_del, {Id1, Vv}};
+compact_ops({replicate_del, {Id1, Vv}}, {add, _}) ->
+    {replicate_del, {Id1, Vv}};
+compact_ops({del, {Id1, Vv}}, {replicate_add, _}) ->
+    {del, {Id1, Vv}};
 compact_ops({del, {Id1, Vv}}, {add, _}) ->
     {del, {Id1, Vv}};
-compact_ops({del, _}, {del, {Id2, Vv2}}) ->
-    % TODO: @gmcabrita it may be necessary to run max() for every element in the version vector and do a merge.
-    {del, {Id2, Vv2}}.
+
+compact_ops({replicate_del, {_Id1, Vv1}}, {replicate_del, {Id2, Vv2}}) ->
+    {replicate_del, {Id2, merge_vvs(Vv1, Vv2)}};
+compact_ops({replicate_del, {_Id1, Vv1}}, {del, {Id2, Vv2}}) ->
+    {del, {Id2, merge_vvs(Vv1, Vv2)}};
+compact_ops({del, {_Id1, Vv1}}, {replicate_del, {Id2, Vv2}}) ->
+    {del, {Id2, merge_vvs(Vv1, Vv2)}};
+compact_ops({del, {_Id1, Vv1}}, {del, {Id2, Vv2}}) ->
+    {del, {Id2, merge_vvs(Vv1, Vv2)}}.
 
 %% @doc Returns true if ?MODULE:downstream/2 needs the state of crdt
 %%      to generate downstream effect
@@ -300,18 +328,20 @@ vv_contains(Vv, {DcId, Ts1}) ->
 -spec merge_vv(deletes(), playerid(), vv()) -> deletes().
 merge_vv(Deletes, Id, Vv) ->
     NewVv = case maps:is_key(Id, Deletes) of
-        true ->
-            OldVv = maps:get(Id, Deletes),
-            maps:fold(fun(_, {DcId, Ts}, Acc) ->
-                Max = case maps:is_key(DcId, Acc) of
-                    true -> max_timestamp(maps:get(DcId, Acc), {DcId, Ts});
-                    false -> {DcId, Ts}
-                end,
-                maps:put(DcId, Max, Acc)
-            end, OldVv, Vv);
+        true -> merge_vvs(maps:get(Id, Deletes), Vv);
         false -> Vv
     end,
     maps:put(Id, NewVv, Deletes).
+
+-spec merge_vvs(vv(), vv()) -> vv().
+merge_vvs(Vv1, Vv2) ->
+    maps:fold(fun(K, Ts, Acc) ->
+        Max = case maps:is_key(K, Acc) of
+            true -> max_timestamp(Ts, maps:get(K, Acc));
+            false -> Ts
+        end,
+        maps:put(K, Max, Acc)
+    end, Vv1, Vv2).
 
 -spec cmp(topk_with_deletes_pair(), topk_with_deletes_pair()) -> boolean().
 cmp(nil, _) -> false;
