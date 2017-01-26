@@ -41,6 +41,7 @@
 -callback is_operation(update()) ->  boolean(). %% Type check
 -callback can_compact(effect(), effect()) -> boolean().
 -callback compact_ops(effect(), effect()) -> effect().
+-callback is_replicate_tagged(effect()) -> boolean().
 
 -callback equal(ccrdt(), ccrdt()) -> boolean().
 -callback to_binary(ccrdt()) -> binary().

@@ -40,6 +40,7 @@
           to_binary/1,
           from_binary/1,
           is_operation/1,
+          is_replicate_tagged/1,
           can_compact/2,
           compact_ops/2,
           require_state_downstream/1
@@ -109,6 +110,13 @@ from_binary(Bin) ->
 -spec is_operation(term()) -> boolean().
 is_operation({add, {Id, Score}}) when is_integer(Id), is_integer(Score) -> true;
 is_operation(_) -> false.
+
+%% @doc Verifies if the operation is tagged as replicate or not.
+%%      This is used by the transaction buffer to only send replicate operations
+%%      to a subset of data centers.
+-spec is_replicate_tagged(term()) -> boolean().
+is_replicate_tagged(_) -> false.
+
 
 -spec can_compact(topk_effect(), topk_effect()) -> boolean().
 can_compact({add, {Id1, _}}, {add, {Id2, _}}) ->
