@@ -72,7 +72,7 @@
 -type topk_with_deletes_effect() :: {add, topk_with_deletes_pair()} |
                                     {del, {playerid(), vv()}} |
                                     {replicate_add, topk_with_deletes_pair()} |
-                                    {replicate_del, {playerid(), vv()}}.
+                                    {replicate_del, {playerid(), vv()}} | {noop}.
 
 %% @doc Create a new, empty 'topk_with_deletes()'
 -spec new() -> topk_with_deletes().
@@ -92,7 +92,7 @@ value({External, _, _, _}) ->
     lists:map(fun({Id, Score, _}) -> {Id, Score} end, List1).
 
 %% @doc Generate a downstream operation.
--spec downstream(topk_with_deletes_update(), any()) -> {ok, topk_with_deletes_effect()} | {error, {invalid_id, playerid()}}.
+-spec downstream(topk_with_deletes_update(), any()) -> {ok, topk_with_deletes_effect()}.
 downstream({add, {Id, Score}}, {External, Internal, _, Size}) ->
     DcId = ?DC_META_DATA:get_my_dc_id(),
     Ts = {DcId, ?TIME:timestamp()},
@@ -112,7 +112,7 @@ downstream({add, {Id, Score, Ts}}, _) -> {ok, {add, {Id, Score, Ts}}};
 downstream({del, {Id, Vv}}, _) when is_map(Vv) -> {ok, {del, {Id, Vv}}};
 downstream({del, Id}, {External, Internal, Deletes, _}) ->
     case maps:is_key(Id, Internal) of
-        false -> {error, {invalid_id, Id}};
+        false -> {ok, noop};
         true ->
             Elems = sets:to_list(maps:get(Id, Internal)),
             % grab the known version vector for the given Id (if it exists)
@@ -431,7 +431,7 @@ mixed_test() ->
 
     NonId = 100,
     ?assertEqual(downstream({del, NonId}, Top3),
-                            {error, {invalid_id, NonId}}),
+                            {ok, noop}),
 
     Id4 = 100,
     Score4 = 1,
