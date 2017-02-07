@@ -187,6 +187,8 @@ is_replicate_tagged({replicate_del, _}) -> true;
 is_replicate_tagged(_) -> false.
 
 -spec can_compact(topk_with_deletes_effect(), topk_with_deletes_effect()) -> boolean().
+can_compact({noop}, _) -> true;
+can_compact(_, {noop}) -> true;
 can_compact({add, {Id1, _, _}}, {add, {Id2, _, _}}) -> Id1 == Id2;
 
 can_compact({replicate_add, {Id1, _, Ts}}, {replicate_del, {Id2, Vv}}) -> Id1 == Id2 andalso vv_contains(Vv, Ts);
@@ -207,6 +209,8 @@ can_compact({del, {Id1, _}}, {del, {Id2, _}}) -> Id1 == Id2;
 can_compact(_, _) -> false.
 
 -spec compact_ops(topk_with_deletes_effect(), topk_with_deletes_effect()) -> topk_with_deletes_effect().
+compact_ops(Op1, {noop}) -> Op1;
+compact_ops({noop}, Op2) -> Op2;
 compact_ops({add, {Id1, Score1, Ts1}}, {add, {Id2, Score2, Ts2}}) ->
     case Score1 > Score2 of
         true -> {add, {Id1, Score1, Ts1}};
