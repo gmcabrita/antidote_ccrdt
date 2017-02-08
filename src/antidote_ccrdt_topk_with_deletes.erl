@@ -77,7 +77,7 @@
 %% @doc Create a new, empty 'topk_with_deletes()'
 -spec new() -> topk_with_deletes().
 new() ->
-    new(5).
+    new(100).
 
 %% @doc Create a new, empty 'topk_with_deletes()'
 -spec new(integer()) -> topk_with_deletes().
