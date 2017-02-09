@@ -70,9 +70,9 @@ new(_, _) ->
     new().
 
 %% @doc The single, total value of a `topk()'
--spec value(topk()) -> list().
-value({Top, _, _}) ->
-    maps:to_list(Top).
+-spec value(topk()) -> any().
+value(Top) ->
+    Top.
 
 %% @doc Generate a downstream operation.
 %% The first parameter is the tuple `{add, {Id, Score}}`.

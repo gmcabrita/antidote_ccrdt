@@ -92,11 +92,9 @@ new() ->
 new(Size) when is_integer(Size), Size > 0 ->
     {#{}, #{}, #{}, #{}, {nil, nil, nil}, Size}.
 
--spec value(state()) -> [{playerid(), score()}].
-value({External, _, _, _, _, _}) ->
-    maps:fold(fun(_, {Score, Id, _}, Acc) ->
-        [{Id, Score} | Acc]
-    end, [], External).
+-spec value(state()) -> state().
+value(Top) ->
+    Top.
 
 -spec downstream(prepare(), state()) -> {ok, downstream()}.
 downstream({add, {Id, Score}}, {Observed, _, _, _, Min, _Size}) ->

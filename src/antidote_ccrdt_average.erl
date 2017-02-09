@@ -61,9 +61,9 @@ new(_, _) ->
     new().
 
 %% @doc The single, total value of an`average()'
--spec value(average()) -> float().
-value({Sum, N}) when is_integer(Sum), is_integer(N) ->
-    Sum / N.
+-spec value(average()) -> any().
+value(Average) ->
+    Average.
 
 %% @doc Generate a downstream operation.
 %% The first parameter is either the tuple `{add, pos_integer()}`
