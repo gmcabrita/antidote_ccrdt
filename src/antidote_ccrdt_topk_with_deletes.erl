@@ -101,8 +101,8 @@ downstream({add, {Id, Score}}, {External, Internal, _, Size}) ->
         case maps:is_key(Id, Internal) of
             true ->
                 Old = maps:get(Id, Internal),
-                maps:put(Id, ordsets:add_element(Elem, Old), Internal);
-            false -> maps:put(Id, ordsets:from_list([Elem]), Internal)
+                maps:put(Id, sets:add_element(Elem, Old), Internal);
+            false -> maps:put(Id, sets:from_list([Elem]), Internal)
         end,
     case External =/= max_k(TmpInternal, Size) of
         true -> {ok, {add, {Id, Score, Ts}}};
@@ -114,7 +114,7 @@ downstream({del, Id}, {External, Internal, Deletes, _}) ->
     case maps:is_key(Id, Internal) of
         false -> {ok, noop};
         true ->
-            Elems = ordsets:to_list(maps:get(Id, Internal)),
+            Elems = sets:to_list(maps:get(Id, Internal)),
             % grab the known version vector for the given Id (if it exists)
             KnownVv = case maps:is_key(Id, Deletes) of
                 true -> maps:get(Id, Deletes);
@@ -264,8 +264,8 @@ add(Id, Score, Ts, {External, Internal, Deletes, Size} = Top) ->
                 case maps:is_key(Id, Internal) of
                     true ->
                         Old = maps:get(Id, Internal),
-                        maps:put(Id, ordsets:add_element(Elem, Old), Internal);
-                    false -> maps:put(Id, ordsets:from_list([Elem]), Internal)
+                        maps:put(Id, sets:add_element(Elem, Old), Internal);
+                    false -> maps:put(Id, sets:from_list([Elem]), Internal)
                 end,
             External1 = case Internal1 == Internal of
                 true -> External;
@@ -281,8 +281,8 @@ del(Id, Vv, {External, Internal, Deletes, Size}) ->
     NewInternal = case maps:is_key(Id, Internal) of
         true ->
             Tmp = maps:get(Id, Internal),
-            Tmp1 = ordsets:filter(fun({_,_,Ts}) -> not vv_contains(Vv, Ts) end, Tmp),
-            case ordsets:size(Tmp1) =:= 0 of
+            Tmp1 = sets:filter(fun({_,_,Ts}) -> not vv_contains(Vv, Ts) end, Tmp),
+            case sets:size(Tmp1) =:= 0 of
                 true -> maps:remove(Id, Internal);
                 false -> maps:put(Id, Tmp1, Internal)
             end;
@@ -293,7 +293,7 @@ del(Id, Vv, {External, Internal, Deletes, Size}) ->
         true ->
             TmpExternal = maps:remove(Id, External),
             Min = min(TmpExternal),
-            Values = ordsets:to_list(ordsets:union(maps:values(NewInternal))),
+            Values = sets:to_list(sets:union(maps:values(NewInternal))),
             SortedValues = lists:sort(fun(X, Y) -> cmp(X, Y) end, Values),
             SortedValues1 = lists:dropwhile(fun({I, _, _} = Elem) -> maps:is_key(I, TmpExternal) orelse cmp(Elem, Min) end, SortedValues),
             case SortedValues1 =:= [] of
@@ -311,7 +311,7 @@ del(Id, Vv, {External, Internal, Deletes, Size}) ->
 -spec max_k(internal_state(), size()) -> map().
 max_k(Internal, Size) ->
     ListOfSets = maps:values(Internal),
-    List1 = ordsets:to_list(ordsets:union(ListOfSets)),
+    List1 = sets:to_list(sets:union(ListOfSets)),
     List2 = lists:sort(fun(X, Y) -> cmp(X,Y) end, List1),
     grab(#{}, List2, Size).
 
@@ -402,7 +402,7 @@ mixed_test() ->
     {ok, DOp1} = Op1,
     {ok, Top1} = update(DOp1, Top),
     ?assertEqual(Top1, {#{Id1 => Elem1},
-                        #{Id1 => ordsets:from_list([Elem1])},
+                        #{Id1 => sets:from_list([Elem1])},
                         #{}, Size}),
 
     Id2 = 2,
@@ -415,8 +415,8 @@ mixed_test() ->
     {ok, DOp2} = Op2,
     {ok, Top2} = update(DOp2, Top1),
     ?assertEqual(Top2, {#{Id1 => Elem1, Id2 => Elem2},
-                        #{Id1 => ordsets:from_list([Elem1]),
-                          Id2 => ordsets:from_list([Elem2])},
+                        #{Id1 => sets:from_list([Elem1]),
+                          Id2 => sets:from_list([Elem2])},
                         #{}, Size}),
 
     Id3 = 1,
@@ -429,8 +429,8 @@ mixed_test() ->
     {ok, DOp3} = Op3,
     {ok, Top3} = update(DOp3, Top2),
     ?assertEqual(Top3, {#{Id1 => Elem1, Id2 => Elem2},
-                        #{Id1 => ordsets:from_list([Elem1, Elem3]),
-                          Id2 => ordsets:from_list([Elem2])},
+                        #{Id1 => sets:from_list([Elem1, Elem3]),
+                          Id2 => sets:from_list([Elem2])},
                         #{}, Size}),
 
     NonId = 100,
@@ -447,9 +447,9 @@ mixed_test() ->
     {ok, DOp4} = Op4,
     {ok, Top4} = update(DOp4, Top3),
     ?assertEqual(Top4, {#{Id1 => Elem1, Id2 => Elem2},
-                        #{Id1 => ordsets:from_list([Elem1, Elem3]),
-                          Id2 => ordsets:from_list([Elem2]),
-                          Id4 => ordsets:from_list([Elem4])},
+                        #{Id1 => sets:from_list([Elem1, Elem3]),
+                          Id2 => sets:from_list([Elem2]),
+                          Id4 => sets:from_list([Elem4])},
                         #{}, Size}),
 
     Id5 = 1,
@@ -462,8 +462,8 @@ mixed_test() ->
     GeneratedDOp4 = {add, Elem4},
     {ok, Top5, [GeneratedDOp4]} = update(DOp5, Top4),
     ?assertEqual(Top5, {#{Id2 => Elem2, Id4 => Elem4},
-                        #{Id2 => ordsets:from_list([Elem2]),
-                          Id4 => ordsets:from_list([Elem4])},
+                        #{Id2 => sets:from_list([Elem2]),
+                          Id4 => sets:from_list([Elem4])},
                         #{Id1 => Vv}, Size}).
 
 internal_delete_test() ->
@@ -478,18 +478,18 @@ internal_delete_test() ->
     ?assertEqual(DelOp, {replicate_del, {2, #{MyDcId => {MyDcId, 1}}}}),
     {ok, Top3} = update(DelOp, Top2),
     ?assertEqual(Top3, {#{1 => {1, 42, {MyDcId, 0}}},
-                        #{1 => ordsets:from_list([{1, 42, {MyDcId, 0}}])},
+                        #{1 => sets:from_list([{1, 42, {MyDcId, 0}}])},
                         #{2 => #{MyDcId => {MyDcId, 1}}},
                         1}),
     GeneratedDelOp = {del, element(2, DelOp)},
     {ok, Top4, [GeneratedDelOp]} = update({add, {2, 5, {MyDcId, 1}}}, Top3),
     ?assertEqual(Top4, {#{1 => {1, 42, {MyDcId, 0}}},
-                        #{1 => ordsets:from_list([{1, 42, {MyDcId, 0}}])},
+                        #{1 => sets:from_list([{1, 42, {MyDcId, 0}}])},
                         #{2 => #{MyDcId => {MyDcId, 1}}},
                         1}),
     {ok, Top5} = update({del, {50, #{MyDcId => {MyDcId, 42}}}}, Top4),
     ?assertEqual(Top5, {#{1 => {1, 42, {MyDcId, 0}}},
-                        #{1 => ordsets:from_list([{1, 42, {MyDcId, 0}}])},
+                        #{1 => sets:from_list([{1, 42, {MyDcId, 0}}])},
                         #{2 => #{MyDcId => {MyDcId, 1}},
                           50 => #{MyDcId => {MyDcId, 42}}},
                         1}).
