@@ -120,22 +120,14 @@ is_replicate_tagged(_) -> false.
 
 -spec can_compact(topk_effect(), topk_effect()) -> boolean().
 can_compact({add, {Id1, _}}, {add, {Id2, _}}) ->
-    Id1 == Id2;
-can_compact(_, {noop}) ->
-    true;
-can_compact({noop}, _) ->
-    true.
+    Id1 == Id2.
 
--spec compact_ops(topk_effect(), topk_effect()) -> topk_effect().
+-spec compact_ops(topk_effect(), topk_effect()) -> {topk_effect(), topk_effect()}.
 compact_ops({add, {Id1, Score1}}, {add, {Id2, Score2}}) ->
     case Score1 > Score2 of
-        true -> {add, {Id1, Score1}};
-        false -> {add, {Id2, Score2}}
-    end;
-compact_ops(Op1, {noop}) ->
-    Op1;
-compact_ops({noop}, Op2) ->
-    Op2.
+        true -> {{add, {Id1, Score1}}, {noop}};
+        false -> {{noop}, {add, {Id2, Score2}}}
+    end.
 
 %% @doc Returns true if ?MODULE:downstream/2 needs the state of crdt
 %%      to generate downstream effect

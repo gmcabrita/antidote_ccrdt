@@ -72,8 +72,8 @@
 -type topk_with_deletes_update() :: {add, {playerid(), score()}} | {del, playerid()}.
 -type topk_with_deletes_effect() :: {add, topk_with_deletes_pair()} |
                                     {del, {playerid(), vv()}} |
-                                    {replicate_add, topk_with_deletes_pair()} |
-                                    {replicate_del, {playerid(), vv()}} | {noop}.
+                                    {add_r, topk_with_deletes_pair()} |
+                                    {del_r, {playerid(), vv()}} | {noop}.
 
 %% @doc Create a new, empty 'topk_with_deletes()'
 -spec new() -> topk_with_deletes().
@@ -104,7 +104,7 @@ downstream({add, {Id, Score}}, {External, _Internal, _, Min, _Size}) ->
     end,
     case ChangesState of
         true -> {ok, {add, {Id, Score, Ts}}};
-        false -> {ok, {replicate_add, {Id, Score, Ts}}}
+        false -> {ok, {add_r, {Id, Score, Ts}}}
     end;
 downstream({del, Id}, {External, Internal, Deletes, _, _}) ->
     case maps:is_key(Id, Internal) of
@@ -132,7 +132,7 @@ downstream({del, Id}, {External, Internal, Deletes, _, _}) ->
             end,
             case Tmp of
                 true -> {ok, {del, {Id, Vv}}};
-                false -> {ok, {replicate_del, {Id, Vv}}}
+                false -> {ok, {del_r, {Id, Vv}}}
             end
     end.
 
@@ -142,11 +142,11 @@ downstream({del, Id}, {External, Internal, Deletes, _, _}) ->
 %% In the case where new operations must be propagated after the update a list
 %% of `topk_with_deletes_effect()' is also returned.
 -spec update(topk_with_deletes_effect(), topk_with_deletes()) -> {ok, topk_with_deletes()} | {ok, topk_with_deletes(), [topk_with_deletes_effect()]}.
-update({replicate_add, {Id, Score, Ts}}, TopK) when is_integer(Id), is_integer(Score) ->
+update({add_r, {Id, Score, Ts}}, TopK) when is_integer(Id), is_integer(Score) ->
     add(Id, Score, Ts, TopK);
 update({add, {Id, Score, Ts}}, TopK) when is_integer(Id), is_integer(Score) ->
     add(Id, Score, Ts, TopK);
-update({replicate_del, {Id, Vv}}, TopK) when is_integer(Id), is_map(Vv) ->
+update({del_r, {Id, Vv}}, TopK) when is_integer(Id), is_map(Vv) ->
     del(Id, Vv, TopK);
 update({del, {Id, Vv}}, TopK) when is_integer(Id), is_map(Vv) ->
     del(Id, Vv, TopK).
@@ -176,67 +176,63 @@ is_operation(_) -> false.
 %%      This is used by the transaction buffer to only send replicate operations
 %%      to a subset of data centers.
 -spec is_replicate_tagged(term()) -> boolean().
-is_replicate_tagged({replicate_add, _}) -> true;
-is_replicate_tagged({replicate_del, _}) -> true;
+is_replicate_tagged({add_r, _}) -> true;
+is_replicate_tagged({del_r, _}) -> true;
 is_replicate_tagged(_) -> false.
 
 -spec can_compact(topk_with_deletes_effect(), topk_with_deletes_effect()) -> boolean().
-can_compact({noop}, _) -> true;
-can_compact(_, {noop}) -> true;
 can_compact({add, {Id1, _, _}}, {add, {Id2, _, _}}) -> Id1 == Id2;
 
-can_compact({replicate_add, {Id1, _, Ts}}, {replicate_del, {Id2, Vv}}) -> Id1 == Id2 andalso vv_contains(Vv, Ts);
-can_compact({replicate_add, {Id1, _, Ts}}, {del, {Id2, Vv}}) -> Id1 == Id2 andalso vv_contains(Vv, Ts);
-can_compact({add, {Id1, _, Ts}}, {replicate_del, {Id2, Vv}}) -> Id1 == Id2 andalso vv_contains(Vv, Ts);
+can_compact({add_r, {Id1, _, Ts}}, {del_r, {Id2, Vv}}) -> Id1 == Id2 andalso vv_contains(Vv, Ts);
+can_compact({add_r, {Id1, _, Ts}}, {del, {Id2, Vv}}) -> Id1 == Id2 andalso vv_contains(Vv, Ts);
+can_compact({add, {Id1, _, Ts}}, {del_r, {Id2, Vv}}) -> Id1 == Id2 andalso vv_contains(Vv, Ts);
 can_compact({add, {Id1, _, Ts}}, {del, {Id2, Vv}}) -> Id1 == Id2 andalso vv_contains(Vv, Ts);
 
-can_compact({replicate_del, {Id1, Vv}}, {replicate_add, {Id2, _, Ts}}) -> Id1 == Id2 andalso vv_contains(Vv, Ts);
-can_compact({replicate_del, {Id1, Vv}}, {add, {Id2, _, Ts}}) -> Id1 == Id2 andalso vv_contains(Vv, Ts);
-can_compact({del, {Id1, Vv}}, {replicate_add, {Id2, _, Ts}}) -> Id1 == Id2 andalso vv_contains(Vv, Ts);
+can_compact({del_r, {Id1, Vv}}, {add_r, {Id2, _, Ts}}) -> Id1 == Id2 andalso vv_contains(Vv, Ts);
+can_compact({del_r, {Id1, Vv}}, {add, {Id2, _, Ts}}) -> Id1 == Id2 andalso vv_contains(Vv, Ts);
+can_compact({del, {Id1, Vv}}, {add_r, {Id2, _, Ts}}) -> Id1 == Id2 andalso vv_contains(Vv, Ts);
 can_compact({del, {Id1, Vv}}, {add, {Id2, _, Ts}}) -> Id1 == Id2 andalso vv_contains(Vv, Ts);
 
-can_compact({replicate_del, {Id1, _}}, {replicate_del, {Id2, _}}) -> Id1 == Id2;
-can_compact({replicate_del, {Id1, _}}, {del, {Id2, _}}) -> Id1 == Id2;
-can_compact({del, {Id1, _}}, {replicate_del, {Id2, _}}) -> Id1 == Id2;
+can_compact({del_r, {Id1, _}}, {del_r, {Id2, _}}) -> Id1 == Id2;
+can_compact({del_r, {Id1, _}}, {del, {Id2, _}}) -> Id1 == Id2;
+can_compact({del, {Id1, _}}, {del_r, {Id2, _}}) -> Id1 == Id2;
 can_compact({del, {Id1, _}}, {del, {Id2, _}}) -> Id1 == Id2;
 
 can_compact(_, _) -> false.
 
--spec compact_ops(topk_with_deletes_effect(), topk_with_deletes_effect()) -> topk_with_deletes_effect().
-compact_ops(Op1, {noop}) -> Op1;
-compact_ops({noop}, Op2) -> Op2;
+-spec compact_ops(topk_with_deletes_effect(), topk_with_deletes_effect()) -> {topk_with_deletes_effect(), topk_with_deletes_effect()}.
 compact_ops({add, {Id1, Score1, Ts1}}, {add, {Id2, Score2, Ts2}}) ->
     case Score1 > Score2 of
-        true -> {add, {Id1, Score1, Ts1}};
-        false -> {add, {Id2, Score2, Ts2}}
+        true -> {{add, {Id1, Score1, Ts1}}, {add_r, {Id2, Score2, Ts2}}};
+        false -> {{add_r, {Id1, Score1, Ts1}}, {add, {Id2, Score2, Ts2}}}
     end;
 
-compact_ops({replicate_add, _}, {replicate_del, {Id2, Vv}}) ->
-    {replicate_del, {Id2, Vv}};
-compact_ops({replicate_add, _}, {del, {Id2, Vv}}) ->
-    {del, {Id2, Vv}};
-compact_ops({add, _}, {replicate_del, {Id2, Vv}}) ->
-    {replicate_del, {Id2, Vv}};
+compact_ops({add_r, _}, {del_r, {Id2, Vv}}) ->
+    {{noop}, {del_r, {Id2, Vv}}};
+compact_ops({add_r, _}, {del, {Id2, Vv}}) ->
+    {{noop}, {del, {Id2, Vv}}};
+compact_ops({add, _}, {del_r, {Id2, Vv}}) ->
+    {{noop}, {del_r, {Id2, Vv}}};
 compact_ops({add, _}, {del, {Id2, Vv}}) ->
-    {del, {Id2, Vv}};
+    {{noop}, {del, {Id2, Vv}}};
 
-compact_ops({replicate_del, {Id1, Vv}}, {replicate_add, _}) ->
-    {replicate_del, {Id1, Vv}};
-compact_ops({replicate_del, {Id1, Vv}}, {add, _}) ->
-    {replicate_del, {Id1, Vv}};
-compact_ops({del, {Id1, Vv}}, {replicate_add, _}) ->
-    {del, {Id1, Vv}};
+compact_ops({del_r, {Id1, Vv}}, {add_r, _}) ->
+    {{del_r, {Id1, Vv}}, {noop}};
+compact_ops({del_r, {Id1, Vv}}, {add, _}) ->
+    {{del_r, {Id1, Vv}}, {noop}};
+compact_ops({del, {Id1, Vv}}, {add_r, _}) ->
+    {{del, {Id1, Vv}}, {noop}};
 compact_ops({del, {Id1, Vv}}, {add, _}) ->
-    {del, {Id1, Vv}};
+    {{del, {Id1, Vv}}, {noop}};
 
-compact_ops({replicate_del, {_Id1, Vv1}}, {replicate_del, {Id2, Vv2}}) ->
-    {replicate_del, {Id2, merge_vvs(Vv1, Vv2)}};
-compact_ops({replicate_del, {_Id1, Vv1}}, {del, {Id2, Vv2}}) ->
-    {del, {Id2, merge_vvs(Vv1, Vv2)}};
-compact_ops({del, {_Id1, Vv1}}, {replicate_del, {Id2, Vv2}}) ->
-    {del, {Id2, merge_vvs(Vv1, Vv2)}};
+compact_ops({del_r, {_Id1, Vv1}}, {del_r, {Id2, Vv2}}) ->
+    {{noop}, {del_r, {Id2, merge_vvs(Vv1, Vv2)}}};
+compact_ops({del_r, {_Id1, Vv1}}, {del, {Id2, Vv2}}) ->
+    {{noop}, {del, {Id2, merge_vvs(Vv1, Vv2)}}};
+compact_ops({del, {_Id1, Vv1}}, {del_r, {Id2, Vv2}}) ->
+    {{noop}, {del, {Id2, merge_vvs(Vv1, Vv2)}}};
 compact_ops({del, {_Id1, Vv1}}, {del, {Id2, Vv2}}) ->
-    {del, {Id2, merge_vvs(Vv1, Vv2)}}.
+    {{noop}, {del, {Id2, merge_vvs(Vv1, Vv2)}}}.
 
 %% @doc Returns true if ?MODULE:downstream/2 needs the state of crdt
 %%      to generate downstream effect
@@ -451,7 +447,7 @@ mixed_test() ->
     Downstream3 = downstream({add, {Id3, Score3}}, Top2),
     Elem3 = {Id3, Score3, {MyDcId, ?TIME:get_time()}},
     Elem3Internal = {Score3, Id3, {MyDcId, ?TIME:get_time()}},
-    Op3 = {ok, {replicate_add, Elem3}},
+    Op3 = {ok, {add_r, Elem3}},
     ?assertEqual(Downstream3, Op3),
 
     {ok, DOp3} = Op3,
@@ -472,7 +468,7 @@ mixed_test() ->
     Downstream4 = downstream({add, {Id4, Score4}}, Top3),
     Elem4 = {Id4, Score4, {MyDcId, ?TIME:get_time()}},
     Elem4Internal = {Score4, Id4, {MyDcId, ?TIME:get_time()}},
-    Op4 = {ok, {replicate_add, Elem4}},
+    Op4 = {ok, {add_r, Elem4}},
     ?assertEqual(Downstream4, Op4),
 
     {ok, DOp4} = Op4,
@@ -510,7 +506,7 @@ internal_delete_test() ->
     {ok, Top1} = update({add, {1, 42, {MyDcId, 0}}}, Top),
     {ok, Top2} = update({add, {2, 5, {MyDcId, 1}}}, Top1),
     {ok, DelOp} = downstream({del, 2}, Top2),
-    ?assertEqual(DelOp, {replicate_del, {2, #{MyDcId => {MyDcId, 1}}}}),
+    ?assertEqual(DelOp, {del_r, {2, #{MyDcId => {MyDcId, 1}}}}),
     {ok, Top3} = update(DelOp, Top2),
     ?assertEqual(Top3, {#{1 => {42, 1, {MyDcId, 0}}},
                         #{1 => gb_sets:from_list([{42, 1, {MyDcId, 0}}])},

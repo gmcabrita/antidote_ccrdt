@@ -118,8 +118,8 @@ is_replicate_tagged(_) -> false.
 -spec can_compact(average_effect(), average_effect()) -> boolean().
 can_compact({add, {_, _}}, {add, {_, _}}) -> true.
 
--spec compact_ops(average_effect(), average_effect()) -> average_effect().
-compact_ops({add, {V1, N1}}, {add, {V2, N2}}) -> {add, {V1 + V2, N1 + N2}}.
+-spec compact_ops(average_effect(), average_effect()) -> {{noop}, average_effect()}.
+compact_ops({add, {V1, N1}}, {add, {V2, N2}}) -> {{noop}, {add, {V1 + V2, N1 + N2}}}.
 
 %% @doc Returns true if ?MODULE:downstream/2 needs the state of crdt
 %%      to generate downstream effect
