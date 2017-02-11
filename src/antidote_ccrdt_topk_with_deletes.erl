@@ -57,7 +57,7 @@
 
 -type external_state() :: map().
 -type internal_state() :: map().
--type deletes() :: map(). % #{playerid() -> #{actor() -> timestamp()}}
+-type deletes() :: map(). % #{playerid() -> #{dcid() -> timestamp()}}
 
 -type size() :: integer().
 -type playerid() :: integer().
@@ -65,10 +65,11 @@
 -type timestamp() :: {dcid(), integer()}. %% erlang:timestamp()
 
 -type topk_with_deletes_pair() :: {playerid(), score(), timestamp()}.
+-type pair_internal() :: {score(), playerid(), timestamp()}.
 -type vv() :: map(). % #{dcid() -> timestamp()}
 
 -type topk_with_deletes() :: {external_state(), internal_state(), deletes(), size()}.
--type topk_with_deletes_update() :: {add, {playerid(), score()}} | {add, {playerid(), score(), timestamp()}} | {del, playerid()} | {del, {playerid(), vv()}}.
+-type topk_with_deletes_update() :: {add, {playerid(), score()}} | {del, playerid()}.
 -type topk_with_deletes_effect() :: {add, topk_with_deletes_pair()} |
                                     {del, {playerid(), vv()}} |
                                     {replicate_add, topk_with_deletes_pair()} |
@@ -82,39 +83,34 @@ new() ->
 %% @doc Create a new, empty 'topk_with_deletes()'
 -spec new(integer()) -> topk_with_deletes().
 new(Size) when is_integer(Size), Size > 0 ->
-    {#{}, #{}, #{}, Size}.
+    {#{}, #{}, #{}, {nil, nil, nil}, Size}.
 
 %% @doc The single, total value of a `topk_with_deletes()'
 -spec value(topk_with_deletes()) -> list().
-value({External, _, _, _}) ->
+value({External, _, _, _, _}) ->
     List = maps:values(External),
-    List1 = lists:sort(fun(X, Y) -> cmp(X,Y) end, List),
-    lists:map(fun({Id, Score, _}) -> {Id, Score} end, List1).
+    List1 = lists:map(fun({Score, Id, _}) -> {Id, Score} end, List),
+    lists:sort(fun({Id1, Score1}, {Id2, Score2}) -> cmp({Score1, Id1, nil}, {Score2, Id2, nil}) end, List1).
 
 %% @doc Generate a downstream operation.
 -spec downstream(topk_with_deletes_update(), any()) -> {ok, topk_with_deletes_effect()}.
-downstream({add, {Id, Score}}, {External, Internal, _, Size}) ->
+downstream({add, {Id, Score}}, {External, _Internal, _, Min, _Size}) ->
     DcId = ?DC_META_DATA:get_my_dc_id(),
     Ts = {DcId, ?TIME:timestamp()},
-    Elem = {Id, Score, Ts},
-    TmpInternal =
-        case maps:is_key(Id, Internal) of
-            true ->
-                Old = maps:get(Id, Internal),
-                maps:put(Id, sets:add_element(Elem, Old), Internal);
-            false -> maps:put(Id, sets:from_list([Elem]), Internal)
-        end,
-    case External =/= max_k(TmpInternal, Size) of
+    Elem = {Score, Id, Ts},
+    ChangesState = case maps:is_key(Id, External) of
+        true -> cmp(Elem, maps:get(Id, External));
+        false -> cmp(Elem, Min)
+    end,
+    case ChangesState of
         true -> {ok, {add, {Id, Score, Ts}}};
         false -> {ok, {replicate_add, {Id, Score, Ts}}}
     end;
-downstream({add, {Id, Score, Ts}}, _) -> {ok, {add, {Id, Score, Ts}}};
-downstream({del, {Id, Vv}}, _) when is_map(Vv) -> {ok, {del, {Id, Vv}}};
-downstream({del, Id}, {External, Internal, Deletes, _}) ->
+downstream({del, Id}, {External, Internal, Deletes, _, _}) ->
     case maps:is_key(Id, Internal) of
         false -> {ok, noop};
         true ->
-            Elems = sets:to_list(maps:get(Id, Internal)),
+            Elems = gb_sets:to_list(maps:get(Id, Internal)),
             % grab the known version vector for the given Id (if it exists)
             KnownVv = case maps:is_key(Id, Deletes) of
                 true -> maps:get(Id, Deletes);
@@ -158,7 +154,7 @@ update({del, {Id, Vv}}, TopK) when is_integer(Id), is_map(Vv) ->
 %% @doc Compare if two `topk_with_deletes()' are equal. Only returns `true()' if both
 %% the top-k contain the same external elements.
 -spec equal(topk_with_deletes(), topk_with_deletes()) -> boolean().
-equal({External1, _, _, Size1}, {External2, _, _, Size2}) ->
+equal({External1, _, _, _, Size1}, {External2, _, _, _, Size2}) ->
     External1 =:= External2 andalso Size1 =:= Size2.
 
 -spec to_binary(topk_with_deletes()) -> binary().
@@ -173,8 +169,6 @@ from_binary(Bin) ->
 %%      that Operation is supported by this particular CCRDT.
 -spec is_operation(term()) -> boolean().
 is_operation({add, {Id, Score}}) when is_integer(Id), is_integer(Score) -> true;
-is_operation({add, {Id, Score, _Ts}}) when is_integer(Id), is_integer(Score) -> true;
-is_operation({del, {Id, Vv}}) when is_integer(Id), is_map(Vv) -> true;
 is_operation({del, Id}) when is_integer(Id) -> true;
 is_operation(_) -> false.
 
@@ -251,7 +245,7 @@ require_state_downstream(_) ->
 
 % Priv
 -spec add(playerid(), score(), timestamp(), topk_with_deletes()) -> {ok, topk_with_deletes()} | {ok, topk_with_deletes(), [topk_with_deletes_effect()]}.
-add(Id, Score, Ts, {External, Internal, Deletes, Size} = Top) ->
+add(Id, Score, Ts, {External, Internal, Deletes, Min, Size} = Top) ->
     Vv = case maps:is_key(Id, Deletes) of
         true -> maps:get(Id, Deletes);
         false -> #{}
@@ -259,30 +253,27 @@ add(Id, Score, Ts, {External, Internal, Deletes, Size} = Top) ->
     case vv_contains(Vv, Ts) of
         true -> {ok, Top, [{del, {Id, Vv}}]};
         false ->
-            Elem = {Id, Score, Ts},
+            Elem = {Score, Id, Ts},
             Internal1 =
                 case maps:is_key(Id, Internal) of
                     true ->
                         Old = maps:get(Id, Internal),
-                        maps:put(Id, sets:add_element(Elem, Old), Internal);
-                    false -> maps:put(Id, sets:from_list([Elem]), Internal)
+                        maps:put(Id, gb_sets:add_element(Elem, Old), Internal);
+                    false -> maps:put(Id, gb_sets:from_list([Elem]), Internal)
                 end,
-            External1 = case Internal1 == Internal of
-                true -> External;
-                false -> max_k(Internal1, Size)
-            end,
-            {ok, {External1, Internal1, Deletes, Size}}
+            {External1, Min1} = recompute_external(External, Min, Size, Id, Elem),
+            {ok, {External1, Internal1, Deletes, Min1, Size}}
     end.
 
 -spec del(playerid(), vv(), topk_with_deletes()) -> {ok, topk_with_deletes()} | {ok, topk_with_deletes(), [topk_with_deletes_effect()]}.
-del(Id, Vv, {External, Internal, Deletes, Size}) ->
+del(Id, Vv, {External, Internal, Deletes, Min, Size}) ->
     NewDeletes = merge_vv(Deletes, Id, Vv),
     %% delete stuff from internal
     NewInternal = case maps:is_key(Id, Internal) of
         true ->
             Tmp = maps:get(Id, Internal),
-            Tmp1 = sets:filter(fun({_,_,Ts}) -> not vv_contains(Vv, Ts) end, Tmp),
-            case sets:size(Tmp1) =:= 0 of
+            Tmp1 = gb_sets:filter(fun({_,_,Ts}) -> not vv_contains(Vv, Ts) end, Tmp),
+            case gb_sets:size(Tmp1) =:= 0 of
                 true -> maps:remove(Id, Internal);
                 false -> maps:put(Id, Tmp1, Internal)
             end;
@@ -292,40 +283,67 @@ del(Id, Vv, {External, Internal, Deletes, Size}) ->
     case maps:is_key(Id, External) andalso vv_contains(Vv, element(3, maps:get(Id, External))) of
         true ->
             TmpExternal = maps:remove(Id, External),
-            Min = min(TmpExternal),
-            Values = sets:to_list(sets:union(maps:values(NewInternal))),
-            SortedValues = lists:sort(fun(X, Y) -> cmp(X, Y) end, Values),
-            SortedValues1 = lists:dropwhile(fun({I, _, _} = Elem) -> maps:is_key(I, TmpExternal) orelse cmp(Elem, Min) end, SortedValues),
+            Values = lists:map(fun(X) ->
+                gb_sets:largest(X)
+            end, maps:values(NewInternal)),
+
+            SortedValues = lists:sort(fun(X, Y) ->
+                cmp(X, Y)
+            end, Values),
+
+            SortedValues1 = lists:dropwhile(fun({_, I, _}) ->
+                maps:is_key(I, TmpExternal)
+            end, SortedValues),
+
             case SortedValues1 =:= [] of
-                true -> {ok, {TmpExternal, NewInternal, NewDeletes, Size}};
+                true ->
+                    NewMin = case maps:get(Id, External) =:= Min of
+                        true -> min_external(TmpExternal);
+                        false -> Min
+                    end,
+                    {ok, {TmpExternal, NewInternal, NewDeletes, NewMin, Size}};
                 false ->
                     NewElem = hd(SortedValues1),
-                    {I, _, _} = NewElem,
+                    {S, I, T} = NewElem,
                     NewExternal = maps:put(I, NewElem, TmpExternal),
-                    Top = {NewExternal, NewInternal, NewDeletes, Size},
-                    {ok, Top, [{add, NewElem}]}
+                    Top = {NewExternal, NewInternal, NewDeletes, NewElem, Size},
+                    {ok, Top, [{add, {I, S, T}}]}
             end;
-        false -> {ok, {External, NewInternal, NewDeletes, Size}}
+        false -> {ok, {External, NewInternal, NewDeletes, Min, Size}}
     end.
 
--spec max_k(internal_state(), size()) -> map().
-max_k(Internal, Size) ->
-    ListOfSets = maps:values(Internal),
-    List1 = sets:to_list(sets:union(ListOfSets)),
-    List2 = lists:sort(fun(X, Y) -> cmp(X,Y) end, List1),
-    grab(#{}, List2, Size).
-
--spec grab(map(), list(), size()) -> map().
-grab(Result, _, 0) ->
-    Result;
-grab(Result, [], _) ->
-    Result;
-grab(Result, [{Id, _, _} = H | T], Size) ->
-    case maps:is_key(Id, Result) of
-        true -> grab(Result, T, Size);
+recompute_external(External, {_, MinId, _} = Min, Size, Id, Elem) ->
+    case maps:is_key(Id, External) of
+        true ->
+            Old = maps:get(Id, External),
+            case cmp(Elem, Old) of
+                true ->
+                    NewExt = maps:put(Id, Elem, External),
+                    NewMin = case Old =:= Min of
+                        true -> min_external(NewExt);
+                        false -> Min
+                    end,
+                    {NewExt, NewMin};
+                false -> {External, Min}
+            end;
         false ->
-            R = maps:put(Id, H, Result),
-            grab(R, T, Size - 1)
+            case maps:size(External) < Size of
+                true ->
+                    NewExt = maps:put(Id, Elem, External),
+                    NewMin = case cmp(Min, Elem) orelse Min =:= {nil, nil, nil} of
+                        true -> Elem;
+                        false -> Min
+                    end,
+                    {NewExt, NewMin};
+                false ->
+                    case cmp(Elem, Min) of
+                        true ->
+                            TmpExt = maps:remove(MinId, External),
+                            NewExt = maps:put(Id, Elem, TmpExt),
+                            {NewExt, min_external(NewExt)};
+                        false -> {External, Min}
+                    end
+            end
     end.
 
 -spec vv_contains(vv(), timestamp()) -> boolean().
@@ -356,10 +374,13 @@ merge_vvs(Vv1, Vv2) ->
         maps:put(K, Max, Acc)
     end, Vv1, Vv2).
 
--spec cmp(topk_with_deletes_pair(), topk_with_deletes_pair()) -> boolean().
+
+-spec cmp(pair_internal() | nil, pair_internal() | nil) -> boolean().
 cmp(nil, _) -> false;
 cmp(_, nil) -> true;
-cmp({Id1, Score1, _}, {Id2, Score2, _}) ->
+cmp({nil, nil, nil}, _) -> false;
+cmp(_, {nil, nil, nil}) -> true;
+cmp({Score1, Id1, _}, {Score2, Id2, _}) ->
     Score1 > Score2 orelse (Score1 == Score2 andalso Id1 > Id2).
 
 -spec max_timestamp(timestamp(), timestamp()) -> timestamp().
@@ -369,12 +390,12 @@ max_timestamp({DcId1, T1}, {DcId2, T2}) ->
         false -> {DcId2, T2}
     end.
 
--spec min(map()) -> topk_with_deletes_pair() | nil.
-min(Top) ->
-    List = maps:values(Top),
+-spec min_external(map()) -> pair_internal() | nil.
+min_external(External) ->
+    List = maps:values(External),
     SortedList = lists:sort(fun(X, Y) -> cmp(Y, X) end, List),
     case SortedList of
-        [] -> nil;
+        [] -> {nil, nil, nil};
         _ -> hd(SortedList)
     end.
 
@@ -390,48 +411,57 @@ mixed_test() ->
     Size = 2,
     Top = new(Size),
     MyDcId = ?DC_META_DATA:get_my_dc_id(),
-    ?assertEqual(Top, {#{}, #{}, #{}, Size}),
+    ?assertEqual(Top, {#{}, #{}, #{}, {nil, nil, nil}, Size}),
 
     Id1 = 1,
     Score1 = 2,
     Downstream1 = downstream({add, {Id1, Score1}}, Top),
     Elem1 = {Id1, Score1, {MyDcId, ?TIME:get_time()}},
+    Elem1Internal = {Score1, Id1, {MyDcId, ?TIME:get_time()}},
     Op1 = {ok, {add, Elem1}},
     ?assertEqual(Downstream1, Op1),
 
     {ok, DOp1} = Op1,
     {ok, Top1} = update(DOp1, Top),
-    ?assertEqual(Top1, {#{Id1 => Elem1},
-                        #{Id1 => sets:from_list([Elem1])},
-                        #{}, Size}),
+    ?assertEqual(Top1, {#{Id1 => Elem1Internal},
+                        #{Id1 => gb_sets:from_list([Elem1Internal])},
+                        #{},
+                        Elem1Internal,
+                        Size}),
 
     Id2 = 2,
     Score2 = 2,
     Downstream2 = downstream({add, {Id2, Score2}}, Top1),
     Elem2 = {Id2, Score2, {MyDcId, ?TIME:get_time()}},
+    Elem2Internal = {Score2, Id2, {MyDcId, ?TIME:get_time()}},
     Op2 = {ok, {add, Elem2}},
     ?assertEqual(Downstream2, Op2),
 
     {ok, DOp2} = Op2,
     {ok, Top2} = update(DOp2, Top1),
-    ?assertEqual(Top2, {#{Id1 => Elem1, Id2 => Elem2},
-                        #{Id1 => sets:from_list([Elem1]),
-                          Id2 => sets:from_list([Elem2])},
-                        #{}, Size}),
+    ?assertEqual(Top2, {#{Id1 => Elem1Internal, Id2 => Elem2Internal},
+                        #{Id1 => gb_sets:from_list([Elem1Internal]),
+                          Id2 => gb_sets:from_list([Elem2Internal])},
+                        #{},
+                        Elem1Internal,
+                        Size}),
 
     Id3 = 1,
     Score3 = 0,
     Downstream3 = downstream({add, {Id3, Score3}}, Top2),
     Elem3 = {Id3, Score3, {MyDcId, ?TIME:get_time()}},
+    Elem3Internal = {Score3, Id3, {MyDcId, ?TIME:get_time()}},
     Op3 = {ok, {replicate_add, Elem3}},
     ?assertEqual(Downstream3, Op3),
 
     {ok, DOp3} = Op3,
     {ok, Top3} = update(DOp3, Top2),
-    ?assertEqual(Top3, {#{Id1 => Elem1, Id2 => Elem2},
-                        #{Id1 => sets:from_list([Elem1, Elem3]),
-                          Id2 => sets:from_list([Elem2])},
-                        #{}, Size}),
+    ?assertEqual(Top3, {#{Id1 => Elem1Internal, Id2 => Elem2Internal},
+                        #{Id1 => gb_sets:from_list([Elem1Internal, Elem3Internal]),
+                          Id2 => gb_sets:from_list([Elem2Internal])},
+                        #{},
+                        Elem1Internal,
+                        Size}),
 
     NonId = 100,
     ?assertEqual(downstream({del, NonId}, Top3),
@@ -441,16 +471,19 @@ mixed_test() ->
     Score4 = 1,
     Downstream4 = downstream({add, {Id4, Score4}}, Top3),
     Elem4 = {Id4, Score4, {MyDcId, ?TIME:get_time()}},
+    Elem4Internal = {Score4, Id4, {MyDcId, ?TIME:get_time()}},
     Op4 = {ok, {replicate_add, Elem4}},
     ?assertEqual(Downstream4, Op4),
 
     {ok, DOp4} = Op4,
     {ok, Top4} = update(DOp4, Top3),
-    ?assertEqual(Top4, {#{Id1 => Elem1, Id2 => Elem2},
-                        #{Id1 => sets:from_list([Elem1, Elem3]),
-                          Id2 => sets:from_list([Elem2]),
-                          Id4 => sets:from_list([Elem4])},
-                        #{}, Size}),
+    ?assertEqual(Top4, {#{Id1 => Elem1Internal, Id2 => Elem2Internal},
+                        #{Id1 => gb_sets:from_list([Elem1Internal, Elem3Internal]),
+                          Id2 => gb_sets:from_list([Elem2Internal]),
+                          Id4 => gb_sets:from_list([Elem4Internal])},
+                        #{},
+                        Elem1Internal,
+                        Size}),
 
     Id5 = 1,
     Downstream5 = downstream({del, Id5}, Top4),
@@ -461,10 +494,12 @@ mixed_test() ->
     {ok, DOp5} = Op5,
     GeneratedDOp4 = {add, Elem4},
     {ok, Top5, [GeneratedDOp4]} = update(DOp5, Top4),
-    ?assertEqual(Top5, {#{Id2 => Elem2, Id4 => Elem4},
-                        #{Id2 => sets:from_list([Elem2]),
-                          Id4 => sets:from_list([Elem4])},
-                        #{Id1 => Vv}, Size}).
+    ?assertEqual(Top5, {#{Id2 => Elem2Internal, Id4 => Elem4Internal},
+                        #{Id2 => gb_sets:from_list([Elem2Internal]),
+                          Id4 => gb_sets:from_list([Elem4Internal])},
+                        #{Id1 => Vv},
+                        Elem4Internal,
+                        Size}).
 
 internal_delete_test() ->
     ?TIME:start_link(),
@@ -477,33 +512,25 @@ internal_delete_test() ->
     {ok, DelOp} = downstream({del, 2}, Top2),
     ?assertEqual(DelOp, {replicate_del, {2, #{MyDcId => {MyDcId, 1}}}}),
     {ok, Top3} = update(DelOp, Top2),
-    ?assertEqual(Top3, {#{1 => {1, 42, {MyDcId, 0}}},
-                        #{1 => sets:from_list([{1, 42, {MyDcId, 0}}])},
+    ?assertEqual(Top3, {#{1 => {42, 1, {MyDcId, 0}}},
+                        #{1 => gb_sets:from_list([{42, 1, {MyDcId, 0}}])},
                         #{2 => #{MyDcId => {MyDcId, 1}}},
+                        {42, 1, {MyDcId, 0}},
                         1}),
     GeneratedDelOp = {del, element(2, DelOp)},
     {ok, Top4, [GeneratedDelOp]} = update({add, {2, 5, {MyDcId, 1}}}, Top3),
-    ?assertEqual(Top4, {#{1 => {1, 42, {MyDcId, 0}}},
-                        #{1 => sets:from_list([{1, 42, {MyDcId, 0}}])},
+    ?assertEqual(Top4, {#{1 => {42, 1, {MyDcId, 0}}},
+                        #{1 => gb_sets:from_list([{42, 1, {MyDcId, 0}}])},
                         #{2 => #{MyDcId => {MyDcId, 1}}},
+                        {42, 1, {MyDcId, 0}},
                         1}),
     {ok, Top5} = update({del, {50, #{MyDcId => {MyDcId, 42}}}}, Top4),
-    ?assertEqual(Top5, {#{1 => {1, 42, {MyDcId, 0}}},
-                        #{1 => sets:from_list([{1, 42, {MyDcId, 0}}])},
+    ?assertEqual(Top5, {#{1 => {42, 1, {MyDcId, 0}}},
+                        #{1 => gb_sets:from_list([{42, 1, {MyDcId, 0}}])},
                         #{2 => #{MyDcId => {MyDcId, 1}},
                           50 => #{MyDcId => {MyDcId, 42}}},
+                        {42, 1, {MyDcId, 0}},
                         1}).
-
-grab_test() ->
-    ?assertEqual(grab(#{}, [], 2), #{}),
-    ?assertEqual(grab(#{}, [{5, 2, 3}], 2),
-                 #{5 => {5, 2, 3}}),
-    ?assertEqual(grab(#{}, [{5, 2, 3}, {5, 1, 3}], 2),
-                 #{5 => {5, 2, 3}}),
-    ?assertEqual(grab(#{}, [{6, 3, 1}, {5, 2, 3}, {5, 1, 3}], 2),
-                 #{6 => {6, 3, 1}, 5 => {5, 2, 3}}),
-    ?assertEqual(grab(#{}, [{6, 3, 1}, {5, 2, 3}, {4, 1, 0}, {5, 1, 3}], 2),
-                 #{6 => {6, 3, 1}, 5 => {5, 2, 3}}).
 
 vv_contains_test() ->
     ?assertEqual(vv_contains(#{a => {a, 0}}, {a, 1}), false),
@@ -547,7 +574,7 @@ delete_semantics_test() ->
     {ok, DelOp} = downstream({del, Id}, Dc2Top2),
     {ok, Dc2Top3} = update(DelOp, Dc2Top2),
     {ok, Dc1Top4} = update(DelOp, Dc1Top3),
-    ?assertEqual(Dc1Top4, {#{}, #{}, #{Id => #{Dc1 => {Dc1, ?TIME:get_time()}}}, 1}),
+    ?assertEqual(Dc1Top4, {#{}, #{}, #{Id => #{Dc1 => {Dc1, ?TIME:get_time()}}}, {nil, nil, nil}, 1}),
     ?assertEqual(Dc1Top4, Dc2Top3),
     {ok, Dc2Top4, [DelOp]} = update(AddOp, Dc2Top3),
     ?assertEqual(Dc2Top4, Dc2Top3).
