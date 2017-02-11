@@ -47,7 +47,7 @@
         ]).
 
 -type top_pair() :: {integer(), integer()}.
--type topk() :: {map(), integer()}.
+-type topk() :: {map(), top_pair() | nil,integer()}.
 -type topk_update() :: {add, top_pair()}.
 -type topk_effect() :: {add, top_pair()} | {noop}.
 
@@ -57,18 +57,18 @@ new() ->
 
 %% @doc Create a new, empty 'topk()'
 new(Size) when is_integer(Size), Size > 0 ->
-    {#{}, Size}.
+    {#{}, {nil, nil}, Size}.
 
 %% @doc Create 'topk()' with initial values
 -spec new(map()) -> topk().
 new(Topk, Size) when is_integer(Size), Size > 0 ->
-    {Topk, Size};
+    {Topk, min(Topk), Size};
 new(_, _) ->
     new().
 
 %% @doc The single, total value of a `topk()'
 -spec value(topk()) -> list().
-value({Top, _}) ->
+value({Top, _, _}) ->
     List = maps:to_list(Top),
     lists:sort(fun(X, Y) -> cmp(X,Y) end, List).
 
@@ -94,8 +94,8 @@ update({add, {Id, Score}}, TopK) when is_integer(Id), is_integer(Score) ->
 %% @doc Compare if two `topk()' are equal. Only returns `true()' if both
 %% the top-k contain the same elements.
 -spec equal(topk(), topk()) -> boolean().
-equal({Top1, Size1}, {Top2, Size2}) ->
-    Top1 =:= Top2 andalso Size1 =:= Size2.
+equal({Top1, Min1, Size1}, {Top2, Min2, Size2}) ->
+    Top1 =:= Top2 andalso Size1 =:= Size2 andalso Min1 =:= Min2.
 
 -spec to_binary(topk()) -> binary().
 to_binary(TopK) ->
@@ -145,17 +145,17 @@ require_state_downstream(_) ->
 
 % Priv
 -spec add(integer(), pos_integer(), topk()) -> topk().
-add(Id, Score, {Top, Size}) ->
+add(Id, Score, {Top, {MinId, MinElem} = Min, Size}) ->
     CurrentSize = maps:size(Top),
     Replacing = case maps:is_key(Id, Top) of
         true -> {Id, maps:get(Id, Top)};
         false ->
             case CurrentSize == Size of
-                true -> min(Top);
-                false -> nil
+                true -> Min;
+                false -> {nil, nil}
             end
     end,
-    NewTop = case CurrentSize < Size andalso Replacing =:= nil of
+    NewTop = case CurrentSize < Size andalso Replacing =:= {nil, nil} of
         true -> maps:put(Id, Score, Top);
         false ->
             case cmp({Id, Score}, Replacing) of
@@ -166,7 +166,13 @@ add(Id, Score, {Top, Size}) ->
                 false -> Top
             end
     end,
-    {NewTop, Size}.
+    NewMin = case maps:size(NewTop) == Size
+                  andalso (not maps:is_key(MinId, NewTop)
+                           orelse maps:get(MinId, NewTop) =/= MinElem) of
+        true -> min(NewTop);
+        false -> Min
+    end,
+    {NewTop, NewMin, Size}.
 
 -spec cmp(top_pair(), top_pair()) -> boolean().
 cmp({Id1, Score1}, {Id2, Score2}) ->
@@ -184,15 +190,15 @@ min(Top) ->
 -ifdef(TEST).
 
 new_test() ->
-    ?assertEqual({#{}, 100}, new()).
+    ?assertEqual({#{}, {nil, nil}, 100}, new()).
 
 %% @doc test the correctness of `value()' function
 value_test() ->
-    Top = {#{1 => 2, 2 => 2}, 25},
+    Top = {#{1 => 2, 2 => 2}, {1, 2}, 25},
     ?assertEqual([{2,2}, {1, 2}], value(Top)).
 
 downstream_add_test() ->
-    Top = {#{1 => 2, 2 => 2}, 2},
+    Top = {#{1 => 2, 2 => 2}, {1, 2}, 2},
     {ok, noop} = downstream({add, {1, 1}}, Top),
     {ok, noop} = downstream({add, {1, 2}}, Top),
     {ok, {add, {1, 3}}} = downstream({add, {1, 3}}, Top).
@@ -208,14 +214,14 @@ update_add_test() ->
     ?assertEqual([{1, 5}, {3,3}], value(Top5)).
 
 equal_test() ->
-    Top1 = {#{1 => 2}, 5},
-    Top2 = {#{1 => 2}, 25},
-    Top3 = {#{1 => 2}, 25},
+    Top1 = {#{1 => 2}, {1, 2}, 5},
+    Top2 = {#{1 => 2}, {1, 2}, 25},
+    Top3 = {#{1 => 2}, {1, 2}, 25},
     ?assertNot(equal(Top1, Top2)),
     ?assert(equal(Top2, Top3)).
 
 binary_test() ->
-    Top1 = {#{1 => 2}, 5},
+    Top1 = {#{1 => 2}, {1, 2}, 5},
     BinaryTop1 = to_binary(Top1),
     {ok, Top2} = from_binary(BinaryTop1),
     ?assert(equal(Top1, Top2)).
