@@ -66,14 +66,14 @@
 
 -type topk_with_deletes_pair() :: {playerid(), score(), timestamp()}.
 -type pair_internal() :: {score(), playerid(), timestamp()}.
--type vv() :: map(). % #{dcid() -> timestamp()}
+-type vc() :: map(). % #{dcid() -> timestamp()}
 
 -type topk_with_deletes() :: {external_state(), internal_state(), deletes(), size()}.
 -type topk_with_deletes_update() :: {add, {playerid(), score()}} | {del, playerid()}.
 -type topk_with_deletes_effect() :: {add, topk_with_deletes_pair()} |
-                                    {del, {playerid(), vv()}} |
+                                    {del, {playerid(), vc()}} |
                                     {add_r, topk_with_deletes_pair()} |
-                                    {del_r, {playerid(), vv()}} | {noop}.
+                                    {del_r, {playerid(), vc()}} | {noop}.
 
 %% @doc Create a new, empty 'topk_with_deletes()'
 -spec new() -> topk_with_deletes().
@@ -112,27 +112,27 @@ downstream({del, Id}, {External, Internal, Deletes, _, _}) ->
         true ->
             Elems = gb_sets:to_list(maps:get(Id, Internal)),
             % grab the known version vector for the given Id (if it exists)
-            KnownVv = case maps:is_key(Id, Deletes) of
+            KnownVc = case maps:is_key(Id, Deletes) of
                 true -> maps:get(Id, Deletes);
                 false -> #{}
             end,
             % update the version vector
-            Vv = lists:foldl(fun({_, _, {DcId, Ts}}, Acc) ->
+            Vc = lists:foldl(fun({_, _, {DcId, Ts}}, Acc) ->
                 Max = case maps:is_key(DcId, Acc) of
                     true -> max_timestamp(maps:get(DcId, Acc), {DcId, Ts});
                     false -> {DcId, Ts}
                 end,
                 maps:put(DcId, Max, Acc)
-            end, KnownVv, Elems),
+            end, KnownVc, Elems),
             Tmp = case maps:is_key(Id, External) of
                 true ->
                     ElemTs = element(3, maps:get(Id, External)),
-                    vv_contains(Vv, ElemTs);
+                    vc_contains(Vc, ElemTs);
                 false -> false
             end,
             case Tmp of
-                true -> {ok, {del, {Id, Vv}}};
-                false -> {ok, {del_r, {Id, Vv}}}
+                true -> {ok, {del, {Id, Vc}}};
+                false -> {ok, {del_r, {Id, Vc}}}
             end
     end.
 
@@ -146,10 +146,10 @@ update({add_r, {Id, Score, Ts}}, TopK) when is_integer(Id), is_integer(Score) ->
     add(Id, Score, Ts, TopK);
 update({add, {Id, Score, Ts}}, TopK) when is_integer(Id), is_integer(Score) ->
     add(Id, Score, Ts, TopK);
-update({del_r, {Id, Vv}}, TopK) when is_integer(Id), is_map(Vv) ->
-    del(Id, Vv, TopK);
-update({del, {Id, Vv}}, TopK) when is_integer(Id), is_map(Vv) ->
-    del(Id, Vv, TopK).
+update({del_r, {Id, Vc}}, TopK) when is_integer(Id), is_map(Vc) ->
+    del(Id, Vc, TopK);
+update({del, {Id, Vc}}, TopK) when is_integer(Id), is_map(Vc) ->
+    del(Id, Vc, TopK).
 
 %% @doc Compare if two `topk_with_deletes()' are equal. Only returns `true()' if both
 %% the top-k contain the same external elements.
@@ -183,15 +183,15 @@ is_replicate_tagged(_) -> false.
 -spec can_compact(topk_with_deletes_effect(), topk_with_deletes_effect()) -> boolean().
 can_compact({add, {Id1, _, _}}, {add, {Id2, _, _}}) -> Id1 == Id2;
 
-can_compact({add_r, {Id1, _, Ts}}, {del_r, {Id2, Vv}}) -> Id1 == Id2 andalso vv_contains(Vv, Ts);
-can_compact({add_r, {Id1, _, Ts}}, {del, {Id2, Vv}}) -> Id1 == Id2 andalso vv_contains(Vv, Ts);
-can_compact({add, {Id1, _, Ts}}, {del_r, {Id2, Vv}}) -> Id1 == Id2 andalso vv_contains(Vv, Ts);
-can_compact({add, {Id1, _, Ts}}, {del, {Id2, Vv}}) -> Id1 == Id2 andalso vv_contains(Vv, Ts);
+can_compact({add_r, {Id1, _, Ts}}, {del_r, {Id2, Vc}}) -> Id1 == Id2 andalso vc_contains(Vc, Ts);
+can_compact({add_r, {Id1, _, Ts}}, {del, {Id2, Vc}}) -> Id1 == Id2 andalso vc_contains(Vc, Ts);
+can_compact({add, {Id1, _, Ts}}, {del_r, {Id2, Vc}}) -> Id1 == Id2 andalso vc_contains(Vc, Ts);
+can_compact({add, {Id1, _, Ts}}, {del, {Id2, Vc}}) -> Id1 == Id2 andalso vc_contains(Vc, Ts);
 
-can_compact({del_r, {Id1, Vv}}, {add_r, {Id2, _, Ts}}) -> Id1 == Id2 andalso vv_contains(Vv, Ts);
-can_compact({del_r, {Id1, Vv}}, {add, {Id2, _, Ts}}) -> Id1 == Id2 andalso vv_contains(Vv, Ts);
-can_compact({del, {Id1, Vv}}, {add_r, {Id2, _, Ts}}) -> Id1 == Id2 andalso vv_contains(Vv, Ts);
-can_compact({del, {Id1, Vv}}, {add, {Id2, _, Ts}}) -> Id1 == Id2 andalso vv_contains(Vv, Ts);
+can_compact({del_r, {Id1, Vc}}, {add_r, {Id2, _, Ts}}) -> Id1 == Id2 andalso vc_contains(Vc, Ts);
+can_compact({del_r, {Id1, Vc}}, {add, {Id2, _, Ts}}) -> Id1 == Id2 andalso vc_contains(Vc, Ts);
+can_compact({del, {Id1, Vc}}, {add_r, {Id2, _, Ts}}) -> Id1 == Id2 andalso vc_contains(Vc, Ts);
+can_compact({del, {Id1, Vc}}, {add, {Id2, _, Ts}}) -> Id1 == Id2 andalso vc_contains(Vc, Ts);
 
 can_compact({del_r, {Id1, _}}, {del_r, {Id2, _}}) -> Id1 == Id2;
 can_compact({del_r, {Id1, _}}, {del, {Id2, _}}) -> Id1 == Id2;
@@ -207,32 +207,32 @@ compact_ops({add, {Id1, Score1, Ts1}}, {add, {Id2, Score2, Ts2}}) ->
         false -> {{add_r, {Id1, Score1, Ts1}}, {add, {Id2, Score2, Ts2}}}
     end;
 
-compact_ops({add_r, _}, {del_r, {Id2, Vv}}) ->
-    {{noop}, {del_r, {Id2, Vv}}};
-compact_ops({add_r, _}, {del, {Id2, Vv}}) ->
-    {{noop}, {del, {Id2, Vv}}};
-compact_ops({add, _}, {del_r, {Id2, Vv}}) ->
-    {{noop}, {del_r, {Id2, Vv}}};
-compact_ops({add, _}, {del, {Id2, Vv}}) ->
-    {{noop}, {del, {Id2, Vv}}};
+compact_ops({add_r, _}, {del_r, {Id2, Vc}}) ->
+    {{noop}, {del_r, {Id2, Vc}}};
+compact_ops({add_r, _}, {del, {Id2, Vc}}) ->
+    {{noop}, {del, {Id2, Vc}}};
+compact_ops({add, _}, {del_r, {Id2, Vc}}) ->
+    {{noop}, {del_r, {Id2, Vc}}};
+compact_ops({add, _}, {del, {Id2, Vc}}) ->
+    {{noop}, {del, {Id2, Vc}}};
 
-compact_ops({del_r, {Id1, Vv}}, {add_r, _}) ->
-    {{del_r, {Id1, Vv}}, {noop}};
-compact_ops({del_r, {Id1, Vv}}, {add, _}) ->
-    {{del_r, {Id1, Vv}}, {noop}};
-compact_ops({del, {Id1, Vv}}, {add_r, _}) ->
-    {{del, {Id1, Vv}}, {noop}};
-compact_ops({del, {Id1, Vv}}, {add, _}) ->
-    {{del, {Id1, Vv}}, {noop}};
+compact_ops({del_r, {Id1, Vc}}, {add_r, _}) ->
+    {{del_r, {Id1, Vc}}, {noop}};
+compact_ops({del_r, {Id1, Vc}}, {add, _}) ->
+    {{del_r, {Id1, Vc}}, {noop}};
+compact_ops({del, {Id1, Vc}}, {add_r, _}) ->
+    {{del, {Id1, Vc}}, {noop}};
+compact_ops({del, {Id1, Vc}}, {add, _}) ->
+    {{del, {Id1, Vc}}, {noop}};
 
-compact_ops({del_r, {_Id1, Vv1}}, {del_r, {Id2, Vv2}}) ->
-    {{noop}, {del_r, {Id2, merge_vvs(Vv1, Vv2)}}};
-compact_ops({del_r, {_Id1, Vv1}}, {del, {Id2, Vv2}}) ->
-    {{noop}, {del, {Id2, merge_vvs(Vv1, Vv2)}}};
-compact_ops({del, {_Id1, Vv1}}, {del_r, {Id2, Vv2}}) ->
-    {{noop}, {del, {Id2, merge_vvs(Vv1, Vv2)}}};
-compact_ops({del, {_Id1, Vv1}}, {del, {Id2, Vv2}}) ->
-    {{noop}, {del, {Id2, merge_vvs(Vv1, Vv2)}}}.
+compact_ops({del_r, {_Id1, Vc1}}, {del_r, {Id2, Vc2}}) ->
+    {{noop}, {del_r, {Id2, merge_vcs(Vc1, Vc2)}}};
+compact_ops({del_r, {_Id1, Vc1}}, {del, {Id2, Vc2}}) ->
+    {{noop}, {del, {Id2, merge_vcs(Vc1, Vc2)}}};
+compact_ops({del, {_Id1, Vc1}}, {del_r, {Id2, Vc2}}) ->
+    {{noop}, {del, {Id2, merge_vcs(Vc1, Vc2)}}};
+compact_ops({del, {_Id1, Vc1}}, {del, {Id2, Vc2}}) ->
+    {{noop}, {del, {Id2, merge_vcs(Vc1, Vc2)}}}.
 
 %% @doc Returns true if ?MODULE:downstream/2 needs the state of crdt
 %%      to generate downstream effect
@@ -242,12 +242,12 @@ require_state_downstream(_) ->
 % Priv
 -spec add(playerid(), score(), timestamp(), topk_with_deletes()) -> {ok, topk_with_deletes()} | {ok, topk_with_deletes(), [topk_with_deletes_effect()]}.
 add(Id, Score, Ts, {External, Internal, Deletes, Min, Size} = Top) ->
-    Vv = case maps:is_key(Id, Deletes) of
+    Vc = case maps:is_key(Id, Deletes) of
         true -> maps:get(Id, Deletes);
         false -> #{}
     end,
-    case vv_contains(Vv, Ts) of
-        true -> {ok, Top, [{del, {Id, Vv}}]};
+    case vc_contains(Vc, Ts) of
+        true -> {ok, Top, [{del, {Id, Vc}}]};
         false ->
             Elem = {Score, Id, Ts},
             Internal1 =
@@ -261,14 +261,14 @@ add(Id, Score, Ts, {External, Internal, Deletes, Min, Size} = Top) ->
             {ok, {External1, Internal1, Deletes, Min1, Size}}
     end.
 
--spec del(playerid(), vv(), topk_with_deletes()) -> {ok, topk_with_deletes()} | {ok, topk_with_deletes(), [topk_with_deletes_effect()]}.
-del(Id, Vv, {External, Internal, Deletes, Min, Size}) ->
-    NewDeletes = merge_vv(Deletes, Id, Vv),
+-spec del(playerid(), vc(), topk_with_deletes()) -> {ok, topk_with_deletes()} | {ok, topk_with_deletes(), [topk_with_deletes_effect()]}.
+del(Id, Vc, {External, Internal, Deletes, Min, Size}) ->
+    NewDeletes = merge_vc(Deletes, Id, Vc),
     %% delete stuff from internal
     NewInternal = case maps:is_key(Id, Internal) of
         true ->
             Tmp = maps:get(Id, Internal),
-            Tmp1 = gb_sets:filter(fun({_,_,Ts}) -> not vv_contains(Vv, Ts) end, Tmp),
+            Tmp1 = gb_sets:filter(fun({_,_,Ts}) -> not vc_contains(Vc, Ts) end, Tmp),
             case gb_sets:size(Tmp1) =:= 0 of
                 true -> maps:remove(Id, Internal);
                 false -> maps:put(Id, Tmp1, Internal)
@@ -276,7 +276,7 @@ del(Id, Vv, {External, Internal, Deletes, Min, Size}) ->
         false -> Internal
     end,
     %% check if external has Id and if said element is contained in the VersionVector
-    case maps:is_key(Id, External) andalso vv_contains(Vv, element(3, maps:get(Id, External))) of
+    case maps:is_key(Id, External) andalso vc_contains(Vc, element(3, maps:get(Id, External))) of
         true ->
             TmpExternal = maps:remove(Id, External),
             Values = lists:map(fun(X) ->
@@ -302,7 +302,7 @@ del(Id, Vv, {External, Internal, Deletes, Min, Size}) ->
                     NewElem = hd(SortedValues1),
                     {S, I, T} = NewElem,
                     NewExternal = maps:put(I, NewElem, TmpExternal),
-                    Top = {NewExternal, NewInternal, NewDeletes, NewElem, Size},
+                    Top = {NewExternal, NewInternal, NewDeletes, min_external(NewExternal), Size},
                     {ok, Top, [{add, {I, S, T}}]}
             end;
         false -> {ok, {External, NewInternal, NewDeletes, Min, Size}}
@@ -342,33 +342,33 @@ recompute_external(External, {_, MinId, _} = Min, Size, Id, Elem) ->
             end
     end.
 
--spec vv_contains(vv(), timestamp()) -> boolean().
-vv_contains(Vv, _) when map_size(Vv) == 0 -> false;
-vv_contains(Vv, {DcId, Ts1}) ->
-    case maps:is_key(DcId, Vv) of
+-spec vc_contains(vc(), timestamp()) -> boolean().
+vc_contains(Vc, _) when map_size(Vc) == 0 -> false;
+vc_contains(Vc, {DcId, Ts1}) ->
+    case maps:is_key(DcId, Vc) of
         true ->
-            {_, Ts2} = maps:get(DcId, Vv),
+            {_, Ts2} = maps:get(DcId, Vc),
             Ts2 >= Ts1;
         false -> false
     end.
 
--spec merge_vv(deletes(), playerid(), vv()) -> deletes().
-merge_vv(Deletes, Id, Vv) ->
-    NewVv = case maps:is_key(Id, Deletes) of
-        true -> merge_vvs(maps:get(Id, Deletes), Vv);
-        false -> Vv
+-spec merge_vc(deletes(), playerid(), vc()) -> deletes().
+merge_vc(Deletes, Id, Vc) ->
+    NewVc = case maps:is_key(Id, Deletes) of
+        true -> merge_vcs(maps:get(Id, Deletes), Vc);
+        false -> Vc
     end,
-    maps:put(Id, NewVv, Deletes).
+    maps:put(Id, NewVc, Deletes).
 
--spec merge_vvs(vv(), vv()) -> vv().
-merge_vvs(Vv1, Vv2) ->
+-spec merge_vcs(vc(), vc()) -> vc().
+merge_vcs(Vc1, Vc2) ->
     maps:fold(fun(K, Ts, Acc) ->
         Max = case maps:is_key(K, Acc) of
             true -> max_timestamp(Ts, maps:get(K, Acc));
             false -> Ts
         end,
         maps:put(K, Max, Acc)
-    end, Vv1, Vv2).
+    end, Vc1, Vc2).
 
 
 -spec cmp(pair_internal() | nil, pair_internal() | nil) -> boolean().
@@ -483,8 +483,8 @@ mixed_test() ->
 
     Id5 = 1,
     Downstream5 = downstream({del, Id5}, Top4),
-    Vv = #{MyDcId => max_timestamp(element(3, Elem1), element(3, Elem3))},
-    Op5 = {ok, {del, {Id5, Vv}}},
+    Vc = #{MyDcId => max_timestamp(element(3, Elem1), element(3, Elem3))},
+    Op5 = {ok, {del, {Id5, Vc}}},
     ?assertEqual(Downstream5, Op5),
 
     {ok, DOp5} = Op5,
@@ -493,7 +493,7 @@ mixed_test() ->
     ?assertEqual(Top5, {#{Id2 => Elem2Internal, Id4 => Elem4Internal},
                         #{Id2 => gb_sets:from_list([Elem2Internal]),
                           Id4 => gb_sets:from_list([Elem4Internal])},
-                        #{Id1 => Vv},
+                        #{Id1 => Vc},
                         Elem4Internal,
                         Size}).
 
@@ -528,26 +528,26 @@ internal_delete_test() ->
                         {42, 1, {MyDcId, 0}},
                         1}).
 
-vv_contains_test() ->
-    ?assertEqual(vv_contains(#{a => {a, 0}}, {a, 1}), false),
-    ?assertEqual(vv_contains(#{a => {a, 3}}, {a, 1}), true),
-    ?assertEqual(vv_contains(#{a => {a, 3},
+vc_contains_test() ->
+    ?assertEqual(vc_contains(#{a => {a, 0}}, {a, 1}), false),
+    ?assertEqual(vc_contains(#{a => {a, 3}}, {a, 1}), true),
+    ?assertEqual(vc_contains(#{a => {a, 3},
                                b => {b, 5}}, {b, 6}), false),
-    ?assertEqual(vv_contains(#{a => {a, 3},
+    ?assertEqual(vc_contains(#{a => {a, 3},
                                b => {b, 5}}, {b, 1}), true),
-    ?assertEqual(vv_contains(#{a => {a, 3},
+    ?assertEqual(vc_contains(#{a => {a, 3},
                                b => {b, 5}}, {c, 0}), false).
 
-simple_merge_vv_test() ->
-    ?assertEqual(merge_vv(#{},
+simple_merge_vc_test() ->
+    ?assertEqual(merge_vc(#{},
                           1,
                         #{a => {a, 3}}),
                  #{1 => #{a => {a, 3}}}),
-    ?assertEqual(merge_vv(#{1 => #{a => {a, 3}}},
+    ?assertEqual(merge_vc(#{1 => #{a => {a, 3}}},
                           1,
                           #{a => {a, 3}}),
                  #{1 => #{a => {a, 3}}}),
-    ?assertEqual(merge_vv(#{1 => #{a => {a, 3}}},
+    ?assertEqual(merge_vc(#{1 => #{a => {a, 3}}},
                           1,
                           #{a => {a, 5}}),
                  #{1 => #{a => {a, 5}}}).
