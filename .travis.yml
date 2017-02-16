@@ -4,8 +4,9 @@ otp_release:
   - 19.1
 install:
   - make
-  - ./rebar update
+  - ./rebar3 update
 script:
   - make test
+  - make dialyzer
 sudo: required
 dist: trusty

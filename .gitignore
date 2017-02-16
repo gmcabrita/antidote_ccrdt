@@ -2,4 +2,6 @@
 .rebar/
 deps/
 ebin/
+_build/
+rebar.lock
 .local_dialyzer_plt
