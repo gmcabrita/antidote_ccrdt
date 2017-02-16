@@ -179,6 +179,12 @@ is_replicate_tagged(_) -> false.
 -spec can_compact(topk_rmv_effect(), topk_rmv_effect()) -> boolean().
 can_compact({add, {Id1, _, _}}, {add, {Id2, _, _}}) ->
     Id1 == Id2;
+can_compact({add_r, {Id1, _, _}}, {add, {Id2, _, _}}) ->
+    Id1 == Id2;
+can_compact({add, {Id1, _, _}}, {add_r, {Id2, _, _}}) ->
+    Id1 == Id2;
+can_compact({add_r, {Id1, _, _}}, {add_r, {Id2, _, _}}) ->
+    Id1 == Id2;
 
 can_compact({add_r, {Id1, _, {DcId, Ts}}}, {rmv_r, {Id2, Vc}}) ->
     Id1 == Id2 andalso vc_get_timestamp(Vc, DcId) >= Ts;
@@ -213,20 +219,29 @@ compact_ops({add, {Id1, Score1, Ts1}}, {add, {Id2, Score2, Ts2}}) ->
         true -> {{add, {Id1, Score1, Ts1}}, {noop}};
         false -> {{noop}, {add, {Id2, Score2, Ts2}}}
     end;
+compact_ops({add_r, Args1}, {add, Args2}) ->
+    compact_ops({add, Args1}, {add, Args2});
+compact_ops({add, Args1}, {add_r, Args2}) ->
+    compact_ops({add, Args1}, {add, Args2});
+compact_ops({add_r, {Id1, Score1, Ts1}}, {add_r, {Id2, Score2, Ts2}}) ->
+    case Score1 > Score2 of
+        true -> {{add_r, {Id1, Score1, Ts1}}, {noop}};
+        false -> {{noop}, {add_r, {Id2, Score2, Ts2}}}
+    end;
 
 compact_ops({add_r, _}, {rmv_r, {Id2, Vc}}) ->
     {{noop}, {rmv_r, {Id2, Vc}}};
 compact_ops({add_r, _}, {rmv, {Id2, Vc}}) ->
     {{noop}, {rmv, {Id2, Vc}}};
 compact_ops({add, _}, {rmv_r, {Id2, Vc}}) ->
-    {{noop}, {rmv_r, {Id2, Vc}}};
+    {{noop}, {rmv, {Id2, Vc}}};
 compact_ops({add, _}, {rmv, {Id2, Vc}}) ->
     {{noop}, {rmv, {Id2, Vc}}};
 
 compact_ops({rmv_r, {Id1, Vc}}, {add_r, _}) ->
     {{rmv_r, {Id1, Vc}}, {noop}};
 compact_ops({rmv_r, {Id1, Vc}}, {add, _}) ->
-    {{rmv_r, {Id1, Vc}}, {noop}};
+    {{rmv, {Id1, Vc}}, {noop}};
 compact_ops({rmv, {Id1, Vc}}, {add_r, _}) ->
     {{rmv, {Id1, Vc}}, {noop}};
 compact_ops({rmv, {Id1, Vc}}, {add, _}) ->
