@@ -27,7 +27,7 @@
 
 -define(CCRDTS, [antidote_ccrdt_average,
                 antidote_ccrdt_topk,
-                antidote_ccrdt_topk_with_rmv
+                antidote_ccrdt_topk_rmv
                ]).
 
 -export([is_type/1
