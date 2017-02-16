@@ -55,8 +55,8 @@
           require_state_downstream/1
         ]).
 
--type external_state() :: #{playerid() => topk_rmv_pair()}.
--type internal_state() :: #{playerid() => topk_rmv_pair()}.
+-type observable_state() :: #{playerid() => topk_rmv_pair()}.
+-type masked_state() :: #{playerid() => topk_rmv_pair()}.
 -type deletes() :: #{playerid() => vc()}.
 
 -type size() :: integer().
@@ -69,8 +69,8 @@
 -type vc() :: #{dcid() => timestamp()}.
 
 -type topk_rmv() :: {
-    external_state(),
-    internal_state(),
+    observable_state(),
+    masked_state(),
     deletes(),
     vc(),
     size()
@@ -96,35 +96,33 @@ new(Size) when is_integer(Size), Size > 0 ->
 
 %% The observable state of `topk_rmv()'.
 -spec value(topk_rmv()) -> list().
-value({External, _, _, _, _, _}) ->
-    List = maps:values(External),
-    List1 = lists:map(fun({Id, Score, _}) -> {Id, Score} end, List),
-    lists:sort(fun({Id1, Score1}, {Id2, Score2}) ->
-        cmp({Id1, Score1, nil}, {Id2, Score2, nil})
-    end, List1).
+value({Observable, _, _, _, _, _}) ->
+    List = maps:values(Observable),
+    List1 = lists:sort(fun(X, Y) -> cmp(X, Y) end, List),
+    lists:map(fun({Id, Score, _}) -> {Id, Score} end, List1).
 
 %% Generates a downstream operation.
 -spec downstream(topk_rmv_update(),
                  topk_rmv()) -> {ok, topk_rmv_effect()}.
-downstream({add, {Id, Score}}, {External, _, _, _, Min, _}) ->
+downstream({add, {Id, Score}}, {Observable, _, _, _, Min, _}) ->
     DcId = ?DC_META_DATA:get_my_dc_id(),
     Ts = {DcId, ?TIME:timestamp()},
     Elem = {Id, Score, Ts},
-    ChangesState = case maps:is_key(Id, External) of
-        true -> cmp(Elem, maps:get(Id, External));
+    ChangesState = case maps:is_key(Id, Observable) of
+        true -> cmp(Elem, maps:get(Id, Observable));
         false -> cmp(Elem, Min)
     end,
     case ChangesState of
         true -> {ok, {add, Elem}};
         false -> {ok, {add_r, Elem}}
     end;
-downstream({rmv, Id}, {External, Internal, _Deletes, Vc, _, _}) ->
-    case maps:is_key(Id, Internal) of
-        false -> {ok, noop};
-        true ->
-            case maps:is_key(Id, External) of
-                true -> {ok, {rmv, {Id, Vc}}};
-                false -> {ok, {rmv_r, {Id, Vc}}}
+downstream({rmv, Id}, {Observable, Masked, _Deletes, Vc, _, _}) ->
+    case maps:is_key(Id, Observable) of
+        true -> {ok, {rmv, {Id, Vc}}};
+        false ->
+            case maps:is_key(Id, Masked) of
+                true -> {ok, {rmv_r, {Id, Vc}}};
+                false -> {ok, noop}
             end
     end.
 
@@ -147,8 +145,8 @@ update({rmv, {Id, Vc}}, TopK) when is_integer(Id), is_map(Vc) ->
 
 %% Verifies if two `topk_rmv()` are observable equivalent.
 -spec equal(topk_rmv(), topk_rmv()) -> boolean().
-equal({External1, _, _, _, _, Size1}, {External2, _, _, _, _, Size2}) ->
-    External1 =:= External2 andalso Size1 =:= Size2.
+equal({Observable1, _, _, _, _, Size1}, {Observable2, _, _, _, _, Size2}) ->
+    Observable1 =:= Observable2 andalso Size1 =:= Size2.
 
 -spec to_binary(topk_rmv()) -> binary().
 to_binary(TopK) ->
@@ -157,7 +155,7 @@ to_binary(TopK) ->
 from_binary(Bin) ->
     {ok, binary_to_term(Bin)}.
 
-%% The following operation verifies that an operation is supported by this particular CCRDT.
+%% Returns true to operations that are supported by the CCRDT.
 -spec is_operation(term()) -> boolean().
 is_operation({add, {Id, Score}}) when is_integer(Id),
                                       is_integer(Score) ->
@@ -175,6 +173,7 @@ is_replicate_tagged({add_r, _}) -> true;
 is_replicate_tagged({rmv_r, _}) -> true;
 is_replicate_tagged(_) -> false.
 
+%% Verifies if two operations can be compacted.
 -spec can_compact(topk_rmv_effect(), topk_rmv_effect()) -> boolean().
 can_compact({add, {Id1, _, _}}, {add, {Id2, _, _}}) ->
     Id1 == Id2;
@@ -204,7 +203,9 @@ can_compact({rmv, {Id1, _}}, {rmv, {Id2, _}}) -> Id1 == Id2;
 
 can_compact(_, _) -> false.
 
--spec compact_ops(topk_rmv_effect(), topk_rmv_effect()) -> {topk_rmv_effect(), topk_rmv_effect()}.
+%% Compacts two operations together.
+-spec compact_ops(topk_rmv_effect(),
+                  topk_rmv_effect()) -> {topk_rmv_effect(), topk_rmv_effect()}.
 compact_ops({add, {Id1, Score1, Ts1}}, {add, {Id2, Score2, Ts2}}) ->
     case Score1 > Score2 of
         true -> {{add, {Id1, Score1, Ts1}}, {noop}};
@@ -238,130 +239,134 @@ compact_ops({rmv, {_Id1, Vc1}}, {rmv_r, {Id2, Vc2}}) ->
 compact_ops({rmv, {_Id1, Vc1}}, {rmv, {Id2, Vc2}}) ->
     {{noop}, {rmv, {Id2, merge_vcs(Vc1, Vc2)}}}.
 
-%% @doc Returns true if ?MODULE:downstream/2 needs the state of crdt
-%%      to generate downstream effect
-require_state_downstream(_) ->
-    true.
+%% True if the object requires the current state to generate downstreams.
+require_state_downstream(_) -> true.
 
-% Priv
--spec add(playerid(), score(), dcid_timestamp(), topk_rmv()) -> {ok, topk_rmv()} | {ok, topk_rmv(), [topk_rmv_effect()]}.
-add(Id, Score, {ReplicaId, Timestamp} = Ts, {External, Internal, Deletes, Vc, Min, Size} = Top) ->
+%%%% Priv
+
+%%
+-spec add(playerid(),
+          score(),
+          dcid_timestamp(),
+          topk_rmv()) -> {ok, topk_rmv()} |
+                         {ok, topk_rmv(), [topk_rmv_effect()]}.
+add(Id, Score, {ReplicaId, Timestamp} = Ts, {Observable,
+                                             Masked,
+                                             Deletes,
+                                             Vc,
+                                             {MinId, _, _} = Min,
+                                             Size}) ->
+    Vc1 = vc_update(Vc, ReplicaId, Timestamp),
     case deletes_get_timestamp(Deletes, Id, ReplicaId) >= Timestamp of
-        true -> {ok, Top, [{rmv, {Id, deletes_get_vc(Deletes, Id)}}]};
+        true -> % element has been removed already, re-propagate a rmv
+            Top = {Observable, Masked, Deletes, Vc1, Min, Size},
+            {ok, Top, [{rmv, {Id, deletes_get_vc(Deletes, Id)}}]};
         false ->
             Elem = {Id, Score, Ts},
-            Internal1 =
-                case maps:is_key(Id, Internal) of
-                    true ->
-                        Old = maps:get(Id, Internal),
-                        maps:put(Id, max_element(Elem, Old), Internal);
-                    false -> maps:put(Id, Elem, Internal)
-                end,
-            {External1, Min1} = recompute_external(External, Min, Size, Id, Elem),
-            Vc1 = vc_update(Vc, ReplicaId, Timestamp),
-            {ok, {External1, Internal1, Deletes, Vc1, Min1, Size}}
+            case maps:is_key(Id, Observable) of
+                true -> % an element with the same id is already observable
+                    Old = maps:get(Id, Observable),
+                    Observable1 = maps:put(Id, max_element(Elem, Old), Observable),
+                    % replace observable minimum only if the old minimum was replaced
+                    Min1 = case Old =:= Min of
+                        true -> min_observable(Observable1);
+                        false -> Min
+                    end,
+                    Top = {Observable1, Masked, Deletes, Vc1, Min1, Size},
+                    {ok, Top};
+                false ->
+                    IsFull = maps:size(Observable) == Size,
+                    NewElem = case maps:is_key(Id, Masked) of
+                        true -> max_element(Elem, maps:get(Id, Masked));
+                        false -> Elem
+                    end,
+                    {FinalObs, FinalMask, FinalMin} = case IsFull of
+                        true -> % replace the minimum
+                            case cmp(NewElem, Min) of
+                                true ->
+                                    Masked1 = maps:put(MinId, Min, Masked),
+                                    Observable1 = maps:remove(MinId, Observable),
+                                    Masked2 = maps:remove(Id, Masked1),
+                                    Observable2 = maps:put(Id, Elem, Observable1),
+                                    Min1 = min_observable(Observable2),
+                                    {Observable2, Masked2, Min1};
+                                false ->
+                                    Masked1 = maps:put(Id, NewElem, Masked),
+                                    {Observable, Masked1, Min}
+                            end;
+                        false ->
+                            Observable1 = maps:put(Id, NewElem, Observable),
+                            Min1 = case cmp(Min, Elem)
+                                        orelse Min =:= {nil, nil, nil} of
+                                true -> Elem;
+                                false -> Min
+                            end,
+                            {Observable1, Masked, Min1}
+                    end,
+                    FinalTop = {FinalObs, FinalMask, Deletes, Vc1, FinalMin, Size},
+                    {ok, FinalTop}
+            end
     end.
 
 -spec rmv(playerid(), vc(), topk_rmv()) -> {ok, topk_rmv()} | {ok, topk_rmv(), [topk_rmv_effect()]}.
-rmv(Id, Vc, {External, Internal, Deletes, LocalVc, Min, Size}) ->
+rmv(Id, Vc, {Observable, Masked, Deletes, LocalVc, Min, Size}) ->
     NewDeletes = merge_vc(Deletes, Id, Vc),
-    %% remove stuff from internal
-    NewInternal = case maps:is_key(Id, Internal) of
+    %% remove stuff from masked
+    NewMasked = case maps:is_key(Id, Masked) of
         true ->
-            {ElemId, _, {RId, Ts}} = maps:get(Id, Internal),
+            {ElemId, _, {RId, Ts}} = maps:get(Id, Masked),
             case vc_get_timestamp(Vc, RId) >= Ts of
-                true -> maps:remove(ElemId, Internal);
-                false -> Internal
+                true -> maps:remove(ElemId, Masked);
+                false -> Masked
             end;
-        false -> Internal
+        false -> Masked
     end,
-    case maps:is_key(Id, External) of
+    case maps:is_key(Id, Observable) of
         true ->
-            {_, _, {ReplicaId, Timestamp}} = maps:get(Id, External),
+            {_, _, {ReplicaId, Timestamp}} = maps:get(Id, Observable),
             case vc_get_timestamp(Vc, ReplicaId) >= Timestamp of
                 true ->
-                    TmpExternal = maps:remove(Id, External),
-                    Values = maps:values(NewInternal),
+                    TmpObservable = maps:remove(Id, Observable),
+                    Values = maps:values(NewMasked),
                     SortedValues = lists:sort(fun(X, Y) ->
                         cmp(X, Y)
                     end, Values),
-
                     SortedValues1 = lists:dropwhile(fun({_, I, _}) ->
-                        maps:is_key(I, TmpExternal)
+                        maps:is_key(I, TmpObservable)
                     end, SortedValues),
 
-                    case SortedValues1 =:= [] of
-                        true ->
-                            NewMin = case maps:get(Id, External) =:= Min of
-                                true -> min_external(TmpExternal);
+                    case SortedValues1 of
+                        [] ->
+                            NewMin = case maps:get(Id, Observable) =:= Min of
+                                true -> min_observable(TmpObservable);
                                 false -> Min
                             end,
                             Top = {
-                                TmpExternal,
-                                NewInternal,
+                                TmpObservable,
+                                NewMasked,
                                 NewDeletes,
                                 LocalVc,
                                 NewMin,
                                 Size
                             },
                             {ok, Top};
-                        false ->
-                            NewElem = hd(SortedValues1),
+                        [NewElem | _] ->
                             {I, _, _} = NewElem,
-                            NewExternal = maps:put(I, NewElem, TmpExternal),
+                            NewObservable = maps:put(I, NewElem, TmpObservable),
+                            NewMasked1 = maps:remove(I, NewMasked),
                             Top = {
-                                NewExternal,
-                                NewInternal,
+                                NewObservable,
+                                NewMasked1,
                                 NewDeletes,
                                 LocalVc,
-                                min_external(NewExternal),
+                                min_observable(NewObservable),
                                 Size
                             },
                             {ok, Top, [{add, NewElem}]}
                     end;
-                false -> {ok, {External, NewInternal, NewDeletes, LocalVc, Min, Size}}
+                false -> {ok, {Observable, NewMasked, NewDeletes, LocalVc, Min, Size}}
             end;
-        false -> {ok, {External, NewInternal, NewDeletes, LocalVc, Min, Size}}
-    end.
-
--spec recompute_external(external_state(),
-                         topk_rmv_pair(),
-                         size(), playerid(),
-                         topk_rmv_pair()) ->
-                            {external_state(), topk_rmv_pair()}.
-recompute_external(External, {MinId, _, _} = Min, Size, Id, Elem) ->
-    case maps:is_key(Id, External) of
-        true ->
-            Old = maps:get(Id, External),
-            case cmp(Elem, Old) of
-                true ->
-                    NewExt = maps:put(Id, Elem, External),
-                    NewMin = case Old =:= Min of
-                        true -> min_external(NewExt);
-                        false -> Min
-                    end,
-                    {NewExt, NewMin};
-                false -> {External, Min}
-            end;
-        false ->
-            case maps:size(External) < Size of
-                true ->
-                    NewExt = maps:put(Id, Elem, External),
-                    NewMin = case cmp(Min, Elem)
-                                  orelse Min =:= {nil, nil, nil} of
-                        true -> Elem;
-                        false -> Min
-                    end,
-                    {NewExt, NewMin};
-                false ->
-                    case cmp(Elem, Min) of
-                        true ->
-                            TmpExt = maps:remove(MinId, External),
-                            NewExt = maps:put(Id, Elem, TmpExt),
-                            {NewExt, min_external(NewExt)};
-                        false -> {External, Min}
-                    end
-            end
+        false -> {ok, {Observable, NewMasked, NewDeletes, LocalVc, Min, Size}}
     end.
 
 
@@ -438,9 +443,9 @@ max_timestamp(T1, T2) ->
         false -> T2
     end.
 
--spec min_external(map()) -> topk_rmv_pair() | nil.
-min_external(External) ->
-    List = maps:values(External),
+-spec min_observable(map()) -> topk_rmv_pair() | nil.
+min_observable(Observable) ->
+    List = maps:values(Observable),
     SortedList = lists:sort(fun(X, Y) -> cmp(Y, X) end, List),
     case SortedList of
         [] -> {nil, nil, nil};
@@ -472,7 +477,7 @@ mixed_test() ->
     {ok, DOp1} = Op1,
     {ok, Top1} = update(DOp1, Top),
     ?assertEqual(Top1, {#{Id1 => Elem1},
-                        #{Id1 => Elem1},
+                        #{},
                         #{},
                         #{MyDcId => Time1},
                         Elem1,
@@ -489,8 +494,7 @@ mixed_test() ->
     {ok, DOp2} = Op2,
     {ok, Top2} = update(DOp2, Top1),
     ?assertEqual(Top2, {#{Id1 => Elem1, Id2 => Elem2},
-                        #{Id1 => Elem1,
-                          Id2 => Elem2},
+                        #{},
                         #{},
                         #{MyDcId => Time2},
                         Elem1,
@@ -507,8 +511,7 @@ mixed_test() ->
     {ok, DOp3} = Op3,
     {ok, Top3} = update(DOp3, Top2),
     ?assertEqual(Top3, {#{Id1 => Elem1, Id2 => Elem2},
-                        #{Id1 => Elem1,
-                          Id2 => Elem2},
+                        #{},
                         #{},
                         #{MyDcId => Time3},
                         Elem1,
@@ -529,9 +532,7 @@ mixed_test() ->
     {ok, DOp4} = Op4,
     {ok, Top4} = update(DOp4, Top3),
     ?assertEqual(Top4, {#{Id1 => Elem1, Id2 => Elem2},
-                        #{Id1 => Elem1,
-                          Id2 => Elem2,
-                          Id4 => Elem4},
+                        #{Id4 => Elem4},
                         #{},
                         #{MyDcId => Time4},
                         Elem1,
@@ -547,14 +548,13 @@ mixed_test() ->
     GeneratedDOp4 = {add, Elem4},
     {ok, Top5, [GeneratedDOp4]} = update(DOp5, Top4),
     ?assertEqual(Top5, {#{Id2 => Elem2, Id4 => Elem4},
-                        #{Id2 => Elem2,
-                          Id4 => Elem4},
+                        #{},
                         #{Id1 => Vc},
                         #{MyDcId => Time4},
                         Elem4,
                         Size}).
 
-internal_delete_test() ->
+masked_delete_test() ->
     ?TIME:start_link(),
     ?DC_META_DATA:start_link(),
     Size = 1,
@@ -566,7 +566,7 @@ internal_delete_test() ->
     ?assertEqual(RmvOp, {rmv_r, {2, #{MyDcId => 2}}}),
     {ok, Top3} = update(RmvOp, Top2),
     ?assertEqual(Top3, {#{1 => {1, 42, {MyDcId, 1}}},
-                        #{1 => {1, 42, {MyDcId, 1}}},
+                        #{},
                         #{2 => #{MyDcId => 2}},
                         #{MyDcId => 2},
                         {1, 42, {MyDcId, 1}},
@@ -576,7 +576,7 @@ internal_delete_test() ->
     ?assertEqual(Top4, Top3),
     {ok, Top5} = update({rmv, {50, #{MyDcId => 42}}}, Top4),
     ?assertEqual(Top5, {#{1 => {1, 42, {MyDcId, 1}}},
-                        #{1 => {1, 42, {MyDcId, 1}}},
+                        #{},
                         #{2 => #{MyDcId => 2},
                           50 => #{MyDcId => 42}},
                         #{MyDcId => 2},
