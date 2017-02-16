@@ -4,4 +4,5 @@ deps/
 ebin/
 _build/
 rebar.lock
+*.dump
 .local_dialyzer_plt
