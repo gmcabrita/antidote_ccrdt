@@ -10,3 +10,6 @@ script:
   - make dialyzer
 sudo: required
 dist: trusty
+branches:
+  except:
+    - metrics
