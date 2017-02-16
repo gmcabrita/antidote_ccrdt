@@ -46,21 +46,24 @@
           require_state_downstream/1
         ]).
 
+-type observable() :: #{integer() => integer()}.
 -type top_pair() :: {integer(), integer()}.
--type topk() :: {map(), top_pair() | nil,integer()}.
+-type topk() :: {observable(), top_pair() | nil,integer()}.
 -type topk_update() :: {add, top_pair()}.
 -type topk_effect() :: {add, top_pair()} | {noop}.
 
 %% @doc Create a new, empty 'topk()'
+-spec new() -> topk().
 new() ->
     new(100).
 
 %% @doc Create a new, empty 'topk()'
+-spec new(pos_integer()) -> topk().
 new(Size) when is_integer(Size), Size > 0 ->
     {#{}, {nil, nil}, Size}.
 
 %% @doc Create 'topk()' with initial values
--spec new(map()) -> topk().
+-spec new(observable(), pos_integer()) -> topk().
 new(Topk, Size) when is_integer(Size), Size > 0 ->
     {Topk, min(Topk), Size};
 new(_, _) ->

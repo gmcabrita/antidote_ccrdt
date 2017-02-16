@@ -58,8 +58,9 @@
 -type observable_state() :: #{playerid() => topk_rmv_pair()}.
 -type masked_state() :: #{playerid() => topk_rmv_pair()}.
 -type deletes() :: #{playerid() => vc()}.
+-type observable_minimum() :: topk_rmv_pair() | {nil, nil, nil}.
 
--type size() :: integer().
+-type size() :: pos_integer().
 -type playerid() :: integer().
 -type score() :: integer().
 -type timestamp() :: integer().
@@ -73,6 +74,7 @@
     masked_state(),
     deletes(),
     vc(),
+    observable_minimum(),
     size()
 }.
 
@@ -95,7 +97,7 @@ new(Size) when is_integer(Size), Size > 0 ->
     {#{}, #{}, #{}, #{}, {nil, nil, nil}, Size}.
 
 %% The observable state of `topk_rmv()'.
--spec value(topk_rmv()) -> list().
+-spec value(topk_rmv()) -> [{playerid(), score()}].
 value({Observable, _, _, _, _, _}) ->
     List = maps:values(Observable),
     List1 = lists:sort(fun(X, Y) -> cmp(X, Y) end, List),
