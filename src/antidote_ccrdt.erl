@@ -36,7 +36,7 @@
 -callback new() -> ccrdt().
 -callback value(ccrdt()) -> value().
 -callback downstream(update(), ccrdt()) -> {ok, effect()} | {error, reason()}.
--callback update(effect(), ccrdt()) ->  {ok, ccrdt()}.
+-callback update(effect(), ccrdt()) ->  {ok, ccrdt()} | {ok, ccrdt(), [effect()]}.
 -callback require_state_downstream(update()) -> boolean().
 -callback is_operation(update()) ->  boolean(). %% Type check
 -callback can_compact(effect(), effect()) -> boolean().

@@ -48,7 +48,7 @@
 
 -type observable() :: #{integer() => integer()}.
 -type top_pair() :: {integer(), integer()}.
--type topk() :: {observable(), top_pair() | nil,integer()}.
+-type topk() :: {observable(), top_pair() | {nil, nil} , integer()}.
 -type topk_update() :: {add, top_pair()}.
 -type topk_effect() :: {add, top_pair()} | {noop}.
 

@@ -58,15 +58,15 @@
 -type observable_state() :: #{playerid() => topk_rmv_pair()}.
 -type masked_state() :: #{playerid() => topk_rmv_pair()}.
 -type deletes() :: #{playerid() => vc()}.
--type observable_minimum() :: topk_rmv_pair() | {nil, nil, nil}.
+-type default_minimum() :: {nil, nil, nil}.
 
 -type size() :: pos_integer().
 -type playerid() :: integer().
 -type score() :: integer().
--type timestamp() :: integer().
+-type timestamp() :: integer() | {integer(), integer(), integer()}.
 -type dcid_timestamp() :: {dcid(), timestamp()}.
 
--type topk_rmv_pair() :: {playerid(), score(), dcid_timestamp()}.
+-type topk_rmv_pair() :: {playerid(), score(), dcid_timestamp()} | default_minimum().
 -type vc() :: #{dcid() => timestamp()}.
 
 -type topk_rmv() :: {
@@ -74,7 +74,7 @@
     masked_state(),
     deletes(),
     vc(),
-    observable_minimum(),
+    topk_rmv_pair(),
     size()
 }.
 
@@ -419,10 +419,8 @@ merge_vcs(Vc1, Vc2) ->
     end, Vc1, Vc2).
 
 
--spec cmp(topk_rmv_pair() | nil,
-          topk_rmv_pair() | nil) -> boolean().
-cmp(nil, _) -> false;
-cmp(_, nil) -> true;
+-spec cmp(topk_rmv_pair(),
+          topk_rmv_pair()) -> boolean().
 cmp({nil, nil, nil}, _) -> false;
 cmp(_, {nil, nil, nil}) -> true;
 cmp({Id1, Score1, Ts1}, {Id2, Score2, Ts2}) ->
@@ -445,7 +443,7 @@ max_timestamp(T1, T2) ->
         false -> T2
     end.
 
--spec min_observable(map()) -> topk_rmv_pair() | nil.
+-spec min_observable(map()) -> topk_rmv_pair().
 min_observable(Observable) ->
     List = maps:values(Observable),
     SortedList = lists:sort(fun(X, Y) -> cmp(Y, X) end, List),

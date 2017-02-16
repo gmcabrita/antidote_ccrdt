@@ -36,7 +36,7 @@ handle_call(get_id, _From, State) ->
     {reply, State, State}.
 
 handle_cast({set_id, Id}, _) ->
-    {reply, Id}.
+    {noreply, Id}.
 
 handle_info(_Info, State) ->
     {noreply, State}.
