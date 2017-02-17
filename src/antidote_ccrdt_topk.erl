@@ -78,10 +78,10 @@ value({Top, _, _}) ->
 %% @doc Generate a downstream operation.
 %% The first parameter is the tuple `{add, {Id, Score}}`.
 %% The second parameter is the top-k ccrdt although it isn't used.
--spec downstream(topk_update(), any()) -> {ok, topk_effect()}.
-downstream({add, {Id, Score}}, Top) ->
-    case Top =/= add(Id, Score, Top) of
-        true -> {ok, {add, {Id, Score}}};
+-spec downstream(topk_update(), topk()) -> {ok, topk_effect()}.
+downstream({add, Elem}, Top) ->
+    case changes_state(Elem, Top) of
+        true -> {ok, {add, Elem}};
         false -> {ok, noop}
     end.
 
@@ -169,7 +169,23 @@ add(Id, Score, {Top, {MinId, MinElem} = Min, Size}) ->
     end,
     {NewTop, NewMin, Size}.
 
+-spec changes_state(top_pair(), topk()) -> boolean().
+changes_state({Id, _} = Elem, {Top, Min, Size}) ->
+    case maps:size(Top) == Size of
+        true ->
+            case maps:is_key(Id, Top) of
+                true -> cmp(Elem, {Id, maps:get(Id, Top)});
+                false -> cmp(Elem, Min)
+            end;
+        false ->
+            case maps:is_key(Id, Top) of
+                true -> cmp(Elem, {Id, maps:get(Id, Top)});
+                false -> true
+            end
+    end.
+
 -spec cmp(top_pair(), top_pair()) -> boolean().
+cmp(_, {nil, nil}) -> true;
 cmp({Id1, Score1}, {Id2, Score2}) ->
     Score1 > Score2 orelse (Score1 == Score2 andalso Id1 > Id2).
 
