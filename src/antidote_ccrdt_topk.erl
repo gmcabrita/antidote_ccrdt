@@ -47,8 +47,8 @@
         ]).
 
 -type observable() :: #{integer() => integer()}.
--type top_pair() :: {integer(), integer()}.
--type topk() :: {observable(), top_pair() | {nil, nil} , integer()}.
+-type top_pair() :: {integer(), integer()} | {nil, nil}.
+-type topk() :: {observable(), top_pair() , integer()}.
 -type topk_update() :: {add, top_pair()}.
 -type topk_effect() :: {add, top_pair()} | {noop}.
 
@@ -163,7 +163,7 @@ add(Id, Score, {Top, {MinId, _} = Min, Size}) ->
                     end;
                 _ ->
                     T = maps:put(Id, Score, Top),
-                    M = case cmp(Min, Elem) orelse Min =:= {nil, nil, nil} of
+                    M = case cmp(Min, Elem) orelse Min =:= {nil, nil} of
                         true -> Elem;
                         false -> Min
                     end,
