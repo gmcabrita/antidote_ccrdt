@@ -212,10 +212,14 @@ value_test() ->
     ?assertEqual([{2,2}, {1, 2}], value(Top)).
 
 downstream_add_test() ->
-    Top = {#{1 => 2, 2 => 2}, {1, 2}, 2},
+    Top = {#{1 => 2, 2 => 2}, {1, 2}, 3},
     {ok, noop} = downstream({add, {1, 1}}, Top),
     {ok, noop} = downstream({add, {1, 2}}, Top),
-    {ok, {add, {1, 3}}} = downstream({add, {1, 3}}, Top).
+    {ok, noop} = downstream({add, {1, -1}}, Top),
+    {ok, noop} = downstream({add, {2, -1}}, Top),
+    {ok, noop} = downstream({add, {2, 1}}, Top),
+    {ok, {add, {1, 3}}} = downstream({add, {1, 3}}, Top),
+    {ok, {add, {3, 2}}} = downstream({add, {3, 2}}, Top).
 
 %% @doc test the correctness of add.
 update_add_test() ->
