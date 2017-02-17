@@ -140,32 +140,35 @@ require_state_downstream(_) ->
 
 % Priv
 -spec add(integer(), pos_integer(), topk()) -> topk().
-add(Id, Score, {Top, {MinId, MinElem} = Min, Size}) ->
-    CurrentSize = maps:size(Top),
-    Replacing = case maps:is_key(Id, Top) of
-        true -> {Id, maps:get(Id, Top)};
+add(Id, Score, {Top, {MinId, _} = Min, Size}) ->
+    {NewTop, NewMin} = case maps:is_key(Id, Top) of
+        true ->
+            Old = maps:get(Id, Top),
+            T = maps:put(Id, max(Old, Score), Top),
+            M = case MinId of
+                Id -> min(T);
+                _ -> Min
+            end,
+            {T, M};
         false ->
-            case CurrentSize == Size of
-                true -> Min;
-                false -> {nil, nil}
+            Elem = {Id, Score},
+            case maps:size(Top) of
+                Size ->
+                    case cmp(Elem, Min) of
+                        true ->
+                            T = maps:remove(MinId, Top),
+                            T1 = maps:put(Id, Score, T),
+                            {T1, min(T1)};
+                        false -> {Top, Min}
+                    end;
+                _ ->
+                    T = maps:put(Id, Score, Top),
+                    M = case cmp(Min, Elem) orelse Min =:= {nil, nil, nil} of
+                        true -> Elem;
+                        false -> Min
+                    end,
+                    {T, M}
             end
-    end,
-    NewTop = case CurrentSize < Size andalso Replacing =:= {nil, nil} of
-        true -> maps:put(Id, Score, Top);
-        false ->
-            case cmp({Id, Score}, Replacing) of
-                true ->
-                    {ReplacingId, _} = Replacing,
-                    T = maps:remove(ReplacingId, Top),
-                    maps:put(Id, Score, T);
-                false -> Top
-            end
-    end,
-    NewMin = case maps:size(NewTop) == Size
-                  andalso (not maps:is_key(MinId, NewTop)
-                           orelse maps:get(MinId, NewTop) =/= MinElem) of
-        true -> min(NewTop);
-        false -> Min
     end,
     {NewTop, NewMin, Size}.
 
