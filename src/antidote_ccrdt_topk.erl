@@ -170,16 +170,16 @@ add(Id, Score, {Top, {MinId, MinElem} = Min, Size}) ->
     {NewTop, NewMin, Size}.
 
 -spec changes_state(top_pair(), topk()) -> boolean().
-changes_state({Id, _} = Elem, {Top, Min, Size}) ->
+changes_state({Id, Score} = Elem, {Top, Min, Size}) ->
     case maps:size(Top) == Size of
         true ->
             case maps:is_key(Id, Top) of
-                true -> cmp(Elem, {Id, maps:get(Id, Top)});
+                true -> Score > maps:get(Id, Top);
                 false -> cmp(Elem, Min)
             end;
         false ->
             case maps:is_key(Id, Top) of
-                true -> cmp(Elem, {Id, maps:get(Id, Top)});
+                true -> Score > maps:get(Id, Top);
                 false -> true
             end
     end.
