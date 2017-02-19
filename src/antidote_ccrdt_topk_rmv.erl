@@ -84,7 +84,7 @@
                            {rmv, {playerid(), vc()}} |
                            {add_r, topk_rmv_pair()} |
                            {rmv_r, {playerid(), vc()}} |
-                           {noop}.
+                           noop | {noop}.
 
 %% Create a new, empty `topk_rmv()` with default size of 100.
 -spec new() -> topk_rmv().
@@ -110,14 +110,19 @@ downstream({add, {Id, Score}}, {Observable, _, _, _, Min, _}) ->
     DcId = ?DC_META_DATA:get_my_dc_id(),
     Ts = {DcId, ?TIME:timestamp()},
     Elem = {Id, Score, Ts},
-    ChangesState = case maps:is_key(Id, Observable) of
-        true -> cmp(Elem, maps:get(Id, Observable));
-        false -> cmp(Elem, Min)
+    Downstream = case maps:is_key(Id, Observable) of
+        true ->
+            case cmp(Elem, maps:get(Id, Observable)) of
+                true -> {add, Elem};
+                false -> noop
+            end;
+        false ->
+            case cmp(Elem, Min) of
+                true -> {add, Elem};
+                false -> {add_r, Elem}
+            end
     end,
-    case ChangesState of
-        true -> {ok, {add, Elem}};
-        false -> {ok, {add_r, Elem}}
-    end;
+    {ok, Downstream};
 downstream({rmv, Id}, {Observable, Masked, _Deletes, Vc, _, _}) ->
     case maps:is_key(Id, Observable) of
         true -> {ok, {rmv, {Id, Vc}}};
@@ -518,19 +523,8 @@ mixed_test() ->
     Id3 = 1,
     Score3 = 0,
     Downstream3 = downstream({add, {Id3, Score3}}, Top2),
-    Time3 = ?TIME:get_time(),
-    Elem3 = {Id3, Score3, {MyDcId, Time3}},
-    Op3 = {ok, {add_r, Elem3}},
-    ?assertEqual(Downstream3, Op3),
-
-    {ok, DOp3} = Op3,
-    {ok, Top3} = update(DOp3, Top2),
-    ?assertEqual(Top3, {#{Id1 => Elem1, Id2 => Elem2},
-                        #{},
-                        #{},
-                        #{MyDcId => Time3},
-                        Elem1,
-                        Size}),
+    ?assertEqual(Downstream3, {ok, noop}),
+    Top3 = Top2,
 
     NonId = 100,
     ?assertEqual(downstream({rmv, NonId}, Top3),
