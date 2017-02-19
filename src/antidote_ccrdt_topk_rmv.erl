@@ -33,10 +33,8 @@
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
--define(TIME, mock_time).
 -define(DC_META_DATA, mock_dc_meta_data).
 -else.
--define(TIME, erlang).
 -define(DC_META_DATA, dc_meta_data_utilities).
 -endif.
 
@@ -63,7 +61,7 @@
 -type size() :: pos_integer().
 -type playerid() :: integer().
 -type score() :: integer().
--type timestamp() :: integer() | {integer(), integer(), integer()}.
+-type timestamp() :: non_neg_integer().
 -type dcid_timestamp() :: {dcid(), timestamp()}.
 
 -type topk_rmv_pair() :: {playerid(), score(), dcid_timestamp()} | default_minimum().
@@ -106,9 +104,9 @@ value({Observable, _, _, _, _, _}) ->
 %% Generates a downstream operation.
 -spec downstream(topk_rmv_update(),
                  topk_rmv()) -> {ok, topk_rmv_effect()}.
-downstream({add, {Id, Score}}, {Observable, _, _, _, Min, _}) ->
+downstream({add, {Id, Score}}, {Observable, _, _, Vc, Min, _}) ->
     DcId = ?DC_META_DATA:get_my_dc_id(),
-    Ts = {DcId, ?TIME:timestamp()},
+    Ts = {DcId, vc_get_timestamp(Vc, DcId) + 1},
     Elem = {Id, Score, Ts},
     Downstream = case maps:is_key(Id, Observable) of
         true ->
@@ -415,7 +413,7 @@ vc_update(Vc, ReplicaId, Timestamp) ->
     case maps:is_key(ReplicaId, Vc) of
         true ->
             OldTimestamp = maps:get(ReplicaId, Vc),
-            MaxTimestamp = max_timestamp(Timestamp, OldTimestamp),
+            MaxTimestamp = max(Timestamp, OldTimestamp),
             maps:put(ReplicaId, MaxTimestamp, Vc);
         false -> maps:put(ReplicaId, Timestamp, Vc)
     end.
@@ -432,7 +430,7 @@ merge_vc(Deletes, Id, Vc) ->
 merge_vcs(Vc1, Vc2) ->
     maps:fold(fun(K, Ts, Acc) ->
         Max = case maps:is_key(K, Acc) of
-            true -> max_timestamp(Ts, maps:get(K, Acc));
+            true -> max(Ts, maps:get(K, Acc));
             false -> Ts
         end,
         maps:put(K, Max, Acc)
@@ -456,13 +454,6 @@ max_element(One, Two) ->
         false -> Two
     end.
 
--spec max_timestamp(timestamp(), timestamp()) -> timestamp().
-max_timestamp(T1, T2) ->
-    case T1 >= T2 of
-        true -> T1;
-        false -> T2
-    end.
-
 -spec min_observable(map()) -> topk_rmv_pair().
 min_observable(Observable) ->
     List = maps:values(Observable),
@@ -479,7 +470,6 @@ min_observable(Observable) ->
 
 %% TODO: simplify tests
 mixed_test() ->
-    ?TIME:start_link(),
     ?DC_META_DATA:start_link(),
     Size = 2,
     Top = new(Size),
@@ -489,8 +479,7 @@ mixed_test() ->
     Id1 = 1,
     Score1 = 2,
     Downstream1 = downstream({add, {Id1, Score1}}, Top),
-    Time1 = ?TIME:get_time(),
-    Elem1 = {Id1, Score1, {MyDcId, Time1}},
+    Elem1 = {Id1, Score1, {MyDcId, 1}},
     Op1 = {ok, {add, Elem1}},
     ?assertEqual(Downstream1, Op1),
 
@@ -499,15 +488,14 @@ mixed_test() ->
     ?assertEqual(Top1, {#{Id1 => Elem1},
                         #{},
                         #{},
-                        #{MyDcId => Time1},
+                        #{MyDcId => 1},
                         Elem1,
                         Size}),
 
     Id2 = 2,
     Score2 = 2,
     Downstream2 = downstream({add, {Id2, Score2}}, Top1),
-    Time2 = ?TIME:get_time(),
-    Elem2 = {Id2, Score2, {MyDcId, Time2}},
+    Elem2 = {Id2, Score2, {MyDcId, 2}},
     Op2 = {ok, {add, Elem2}},
     ?assertEqual(Downstream2, Op2),
 
@@ -516,7 +504,7 @@ mixed_test() ->
     ?assertEqual(Top2, {#{Id1 => Elem1, Id2 => Elem2},
                         #{},
                         #{},
-                        #{MyDcId => Time2},
+                        #{MyDcId => 2},
                         Elem1,
                         Size}),
 
@@ -533,8 +521,7 @@ mixed_test() ->
     Id4 = 100,
     Score4 = 1,
     Downstream4 = downstream({add, {Id4, Score4}}, Top3),
-    Time4 = ?TIME:get_time(),
-    Elem4 = {Id4, Score4, {MyDcId, Time4}},
+    Elem4 = {Id4, Score4, {MyDcId, 3}},
     Op4 = {ok, {add_r, Elem4}},
     ?assertEqual(Downstream4, Op4),
 
@@ -543,13 +530,13 @@ mixed_test() ->
     ?assertEqual(Top4, {#{Id1 => Elem1, Id2 => Elem2},
                         #{Id4 => Elem4},
                         #{},
-                        #{MyDcId => Time4},
+                        #{MyDcId => 3},
                         Elem1,
                         Size}),
 
     Id5 = 1,
     Downstream5 = downstream({rmv, Id5}, Top4),
-    Vc = #{MyDcId => Time4},
+    Vc = #{MyDcId => 3},
     Op5 = {ok, {rmv, {Id5, Vc}}},
     ?assertEqual(Downstream5, Op5),
 
@@ -559,12 +546,11 @@ mixed_test() ->
     ?assertEqual(Top5, {#{Id2 => Elem2, Id4 => Elem4},
                         #{},
                         #{Id1 => Vc},
-                        #{MyDcId => Time4},
+                        #{MyDcId => 3},
                         Elem4,
                         Size}).
 
 masked_delete_test() ->
-    ?TIME:start_link(),
     ?DC_META_DATA:start_link(),
     Size = 1,
     Top = new(Size),
@@ -607,7 +593,6 @@ simple_merge_vc_test() ->
                  #{1 => #{a => {a, 5}}}).
 
 delete_semantics_test() ->
-    ?TIME:start_link(),
     ?DC_META_DATA:start_link(),
     Dc1 = ?DC_META_DATA:get_my_dc_id(),
     Dc1Top1 = new(1),
@@ -616,18 +601,16 @@ delete_semantics_test() ->
     Score1 = 45,
     Score2 = 50,
     {ok, AddOp} = downstream({add, {Id, Score1}}, Dc1Top1),
-    Time1 = ?TIME:get_time(),
-    ?assertEqual(AddOp, {add, {Id, Score1, {Dc1, Time1}}}),
+    ?assertEqual(AddOp, {add, {Id, Score1, {Dc1, 1}}}),
     {ok, Dc1Top2} = update(AddOp, Dc1Top1),
     {ok, AddOp2} = downstream({add, {Id, Score2}}, Dc1Top2),
-    Time2 = ?TIME:get_time(),
-    ?assertEqual(AddOp2, {add, {Id, Score2, {Dc1, Time2}}}),
+    ?assertEqual(AddOp2, {add, {Id, Score2, {Dc1, 2}}}),
     {ok, Dc1Top3} = update(AddOp2, Dc1Top2),
     {ok, Dc2Top2} = update(AddOp2, Dc2Top1),
     {ok, RmvOp} = downstream({rmv, Id}, Dc2Top2),
     {ok, Dc2Top3} = update(RmvOp, Dc2Top2),
     {ok, Dc1Top4} = update(RmvOp, Dc1Top3),
-    ?assertEqual(Dc1Top4, {#{}, #{}, #{Id => #{Dc1 => Time2}}, #{Dc1 => Time2}, {nil, nil, nil}, 1}),
+    ?assertEqual(Dc1Top4, {#{}, #{}, #{Id => #{Dc1 => 2}}, #{Dc1 => 2}, {nil, nil, nil}, 1}),
     ?assertEqual(Dc1Top4, Dc2Top3),
     {ok, Dc2Top4, [RmvOp]} = update(AddOp, Dc2Top3),
     ?assertEqual(Dc2Top4, Dc2Top3).
