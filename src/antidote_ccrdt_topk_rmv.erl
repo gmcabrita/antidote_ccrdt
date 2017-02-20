@@ -96,7 +96,9 @@ new(Size) when is_integer(Size), Size > 0 ->
 value({External, _, _, _, _, _}) ->
     List = maps:values(External),
     List1 = lists:map(fun({Score, Id, _}) -> {Id, Score} end, List),
-    lists:sort(fun({Id1, Score1}, {Id2, Score2}) -> cmp({Score1, Id1, {nil, 0}}, {Score2, Id2, {nil, 0}}) end, List1).
+    lists:sort(fun({Id1, Score1}, {Id2, Score2}) ->
+        cmp({Score1, Id1, {nil, {0, 0, 0}}}, {Score2, Id2, {nil, {0, 0, 0}}})
+    end, List1).
 
 -spec downstream(prepare(), state()) -> {ok, downstream()}.
 downstream({add, {Id, Score}}, {Observed, _, _, _, Min, _Size}) ->
