@@ -28,7 +28,7 @@ set_my_dc_id(Id) ->
     gen_server:cast(?MODULE, {set_id, Id}).
 
 init([]) ->
-    {ok, replica1}.
+    {ok, {replica1, 0}}.
 
 %% gen_server callbacks
 

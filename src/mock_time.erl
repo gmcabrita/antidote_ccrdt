@@ -5,7 +5,7 @@
 %% api
 
 -export([start_link/0,
-         timestamp/0,
+         system_time/1,
          get_time/0]).
 
 %% gen_server callbacks
@@ -21,19 +21,19 @@
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 
-timestamp() ->
+system_time(_) ->
     gen_server:call(?MODULE, timestamp).
 
 get_time() ->
     gen_server:call(?MODULE, get_time).
 
 init([]) ->
-    {ok, {0, 0, 0}}.
+    {ok, 0}.
 
 %% gen_server callbacks
 
-handle_call(timestamp, _From, {X, Y, Z}) ->
-    {reply, {X, Y, Z + 1}, {X, Y, Z + 1}};
+handle_call(timestamp, _From, State) ->
+    {reply, State + 1, State + 1};
 handle_call(get_time, _From, State) ->
     {reply, State, State}.
 

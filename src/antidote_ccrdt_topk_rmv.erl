@@ -54,7 +54,7 @@
 -type size() :: pos_integer().
 -type playerid() :: integer().
 -type score() :: integer().
--type timestamp() :: {integer(), integer(), integer()}.
+-type timestamp() :: integer().
 -type dcid_timestamp() :: {dcid(), timestamp()}.
 
 -type pair() :: {playerid(), score(), dcid_timestamp()}.
@@ -97,12 +97,13 @@ value({External, _, _, _, _, _}) ->
     List = maps:values(External),
     List1 = lists:map(fun({Score, Id, _}) -> {Id, Score} end, List),
     lists:sort(fun({Id1, Score1}, {Id2, Score2}) ->
-        cmp({Score1, Id1, {nil, {0, 0, 0}}}, {Score2, Id2, {nil, {0, 0, 0}}})
+        cmp({Score1, Id1, {nil, 0}}, {Score2, Id2, {nil, 0}})
     end, List1).
 
 -spec downstream(prepare(), state()) -> {ok, downstream()}.
 downstream({add, {Id, Score}}, {Observed, _, _, _, Min, _Size}) ->
-    Ts = {?DC_META_DATA:get_my_dc_id(), ?TIME:timestamp()},
+    {DcId, _} = ?DC_META_DATA:get_my_dc_id(),
+    Ts = {DcId, ?TIME:system_time(milli_seconds)},
     Elem = {Id, Score, Ts},
     ElemInternal = {Score, Id, Ts},
     ChangesState = case maps:is_key(Id, Observed) of
@@ -390,7 +391,7 @@ mixed_test() ->
     ?DC_META_DATA:start_link(),
     Size = 2,
     Top = new(Size),
-    MyDcId = ?DC_META_DATA:get_my_dc_id(),
+    {MyDcId, _} = ?DC_META_DATA:get_my_dc_id(),
     ?assertEqual(Top, {#{}, #{}, #{}, #{}, {nil, nil, nil}, Size}),
 
     Id1 = 1,
@@ -495,7 +496,7 @@ masked_delete_test() ->
     ?DC_META_DATA:start_link(),
     Size = 1,
     Top = new(Size),
-    MyDcId = ?DC_META_DATA:get_my_dc_id(),
+    {MyDcId, _} = ?DC_META_DATA:get_my_dc_id(),
     {ok, Top1} = update({add, {1, 42, {MyDcId, {0, 0, 1}}}}, Top),
     {ok, Top2} = update({add, {2, 5, {MyDcId, {0, 0, 2}}}}, Top1),
     {ok, RmvOp} = downstream({rmv, 2}, Top2),
@@ -541,7 +542,7 @@ simple_merge_vc_test() ->
 delete_semantics_test() ->
     ?TIME:start_link(),
     ?DC_META_DATA:start_link(),
-    Dc1 = ?DC_META_DATA:get_my_dc_id(),
+    {Dc1, _} = ?DC_META_DATA:get_my_dc_id(),
     Dc1Top1 = new(1),
     Dc2Top1 = new(1),
     Id = 1,
