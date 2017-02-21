@@ -72,8 +72,7 @@ new(_, _) ->
 %% @doc The single, total value of a `topk()'
 -spec value(topk()) -> list().
 value({Top, _, _}) ->
-    List = maps:to_list(Top),
-    lists:sort(fun(X, Y) -> cmp(X,Y) end, List).
+    maps:to_list(Top).
 
 %% @doc Generate a downstream operation.
 %% The first parameter is the tuple `{add, {Id, Score}}`.
@@ -209,7 +208,7 @@ new_test() ->
 %% @doc test the correctness of `value()' function
 value_test() ->
     Top = {#{1 => 2, 2 => 2}, {1, 2}, 25},
-    ?assertEqual([{2,2}, {1, 2}], value(Top)).
+    ?assertEqual(sets:from_list([{2,2}, {1, 2}]), sets:from_list(value(Top))).
 
 downstream_add_test() ->
     Top = {#{1 => 2, 2 => 2}, {1, 2}, 3},

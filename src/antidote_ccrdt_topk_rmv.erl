@@ -94,11 +94,9 @@ new(Size) when is_integer(Size), Size > 0 ->
 
 -spec value(state()) -> [{playerid(), score()}].
 value({External, _, _, _, _, _}) ->
-    List = maps:values(External),
-    List1 = lists:map(fun({Score, Id, _}) -> {Id, Score} end, List),
-    lists:sort(fun({Id1, Score1}, {Id2, Score2}) ->
-        cmp({Score1, Id1, {nil, 0}}, {Score2, Id2, {nil, 0}})
-    end, List1).
+    maps:fold(fun(_, {Score, Id, _}, Acc) ->
+        [{Id, Score} | Acc]
+    end, [], External).
 
 -spec downstream(prepare(), state()) -> {ok, downstream()}.
 downstream({add, {Id, Score}}, {Observed, _, _, _, Min, _Size}) ->
@@ -222,7 +220,7 @@ add(Id, Score, {DcId, Timestamp} = Ts, {Observed, Masked, Removals, Vc, Min, Siz
                     true ->
                         Old = maps:get(Id, Masked),
                         maps:put(Id, gb_sets:add_element(Elem, Old), Masked);
-                    false -> maps:put(Id, gb_sets:from_list([Elem]), Masked)
+                    false -> maps:put(Id, gb_sets:singleton(Elem), Masked)
                 end,
             {Observed1, Min1} = recompute_observed(Observed, Min, Size, Id, Elem),
             {ok, {Observed1, Masked1, Removals, Vc1, Min1, Size}}
@@ -252,19 +250,14 @@ rmv(Id, VcRmv, {Observed, Masked, Removals, Vc, Min, Size}) ->
     case ImpactsObserved of
         true ->
             TmpObserved = maps:remove(Id, Observed),
-            Values = lists:map(fun(X) ->
-                gb_sets:largest(X)
-            end, maps:values(NewMasked)),
+            Values = maps:fold(fun(I, S, Set) ->
+                case maps:is_key(I, TmpObserved) of
+                    true -> Set;
+                    false -> gb_sets:add(gb_sets:largest(S), Set)
+                end
+            end, gb_sets:new(), NewMasked),
 
-            SortedValues = lists:sort(fun(X, Y) ->
-                cmp(X, Y)
-            end, Values),
-
-            SortedValues1 = lists:dropwhile(fun({_, I, _}) ->
-                maps:is_key(I, TmpObserved)
-            end, SortedValues),
-
-            case SortedValues1 =:= [] of
+            case gb_sets:size(Values) =:= 0 of
                 true ->
                     NewMin = case maps:get(Id, Observed) =:= Min of
                         true -> min_observed(TmpObserved);
@@ -272,7 +265,7 @@ rmv(Id, VcRmv, {Observed, Masked, Removals, Vc, Min, Size}) ->
                     end,
                     {ok, {TmpObserved, NewMasked, NewRemovals, Vc, NewMin, Size}};
                 false ->
-                    NewElem = hd(SortedValues1),
+                    NewElem = gb_sets:largest(Values),
                     {S, I, T} = NewElem,
                     NewObserved = maps:put(I, NewElem, TmpObserved),
                     Top = {NewObserved, NewMasked, NewRemovals, Vc, min_observed(NewObserved), Size},
@@ -374,10 +367,11 @@ cmp({Score1, Id1, {_, Ts1}}, {Score2, Id2, {_, Ts2}}) ->
 -spec min_observed(obs_state()) -> minimum().
 min_observed(Observed) ->
     List = maps:values(Observed),
-    SortedList = lists:sort(fun(X, Y) -> cmp(Y, X) end, List),
-    case SortedList of
+    case List of
         [] -> {nil, nil, nil};
-        _ -> hd(SortedList)
+        _ ->
+            Set = gb_sets:from_list(List),
+            gb_sets:smallest(Set)
     end.
 
 %% ===================================================================
