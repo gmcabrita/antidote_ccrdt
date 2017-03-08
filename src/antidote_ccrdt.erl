@@ -26,10 +26,11 @@
 -include("antidote_ccrdt.hrl").
 
 -define(CCRDTS, [antidote_ccrdt_average,
-                antidote_ccrdt_topk,
-                antidote_ccrdt_topk_rmv
-               ]).
--define(PARTIALLY_INCREMENTAL, [antidote_ccrdt_topk_rmv]).
+                 antidote_ccrdt_topk,
+                 antidote_ccrdt_topk_rmv,
+                 antidote_ccrdt_leaderboard]).
+-define(PARTIALLY_INCREMENTAL, [antidote_ccrdt_topk_rmv,
+                                antidote_ccrdt_leaderboard]).
 
 -export([is_type/1,
          is_partially_incremental/1
