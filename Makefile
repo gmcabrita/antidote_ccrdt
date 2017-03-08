@@ -5,27 +5,28 @@ all: deps compile
 
 # compiles the codebase
 compile: deps
-	@./rebar3 compile
+	@escript rebar3 compile
 
 # tests the codebase
 test:
-	@./rebar3 eunit
+	@escript rebar3 eunit
+
+# performs test coverage analysis
+cover:
+	@escript rebar3 cover
 
 # compiles the codebase but skips dependencies
 app:
-	@./rebar3 compile skip_deps=true
+	@escript rebar3 compile skip_deps=true
 
 # fetches dependencies
 deps:
-	@./rebar3 get-deps
+	@escript rebar3 get-deps
 
 # cleans the rebar3 artifact folders
 clean:
-	@./rebar3 clean
-
-DIALYZER_APPS = kernel stdlib sasl erts ssl tools os_mon runtime_tools crypto inets \
-	xmerl webtool eunit syntax_tools compiler mnesia public_key snmp
+	@escript rebar3 clean
 
 # runs dialyzer
 dialyzer:
-	./rebar3 dialyzer
+	@escript rebar3 dialyzer
