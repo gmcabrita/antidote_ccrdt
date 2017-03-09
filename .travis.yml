@@ -13,3 +13,4 @@ dist: trusty
 branches:
   except:
     - metrics
+    - benchmarks
