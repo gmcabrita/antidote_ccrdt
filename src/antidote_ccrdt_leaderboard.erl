@@ -53,19 +53,18 @@
 
 -type playerid() :: integer().
 -type score() :: integer().
--type pair() :: {playerid(), score()}.
+-type pair() :: {playerid(), score()} | {nil, nil}.
 
 -type obs_state() :: #{playerid() => score()}.
 -type mask_state() :: #{playerid() => score()}.
 -type bans() :: sets:set(playerid()).
--type min() :: pair() | {nil, nil}.
 -type size() :: non_neg_integer().
 
 -type state() :: {
     obs_state(),
     mask_state(),
     bans(),
-    min(),
+    pair(),
     size()
 }.
 
@@ -85,24 +84,21 @@ value({Observed, _, _, _, _}) ->
     maps:to_list(Observed).
 
 -spec downstream(prepare(), state()) -> {ok, downstream()}.
-downstream({add, {Id, Score}}, {Observed, Masked, Bans, Min, Size}) ->
-    Elem = {Id, Score},
+downstream({add, {Id, Score} = Elem}, {Observed, Masked, Bans, Min, Size}) ->
     case sets:is_element(Id, Bans) of
         true -> {ok, noop};
         false ->
-            In1 = maps:is_key(Id, Observed),
-            In2 = maps:is_key(Id, Masked),
-            B1 = In1 andalso Score > maps:get(Id, Observed),
-            B2 = In2 andalso Score > maps:get(Id, Masked),
-            case {In1, B1, In2, B2} of
-                {true, true, false, false} -> {ok, {add, Elem}};
-                {true, false, false, false} -> {ok, noop};
-                {false, false, true, true} -> {ok, {add_r, Elem}};
-                {false, false, true, false} -> {ok, noop};
-                {false, false, false, false} ->
-                    case maps:size(Observed) < Size orelse cmp(Elem, Min) of
-                        true -> {ok, {add, Elem}};
-                        false -> {ok, {add_r, Elem}}
+            case {maps:is_key(Id, Observed), Score > maps:get(Id, Observed, -1)} of
+                {true, true} -> {ok, {add, Elem}};
+                {true, false} -> {ok, noop};
+                {false, _} ->
+                    case {maps:is_key(Id, Masked), Score > maps:get(Id, Masked, -1)} of
+                        {true, false} -> {ok, noop};
+                        _ ->
+                            case maps:size(Observed) < Size orelse cmp(Elem, Min) of
+                                true -> {ok, {add, Elem}};
+                                false -> {ok, {add_r, Elem}}
+                            end
                     end
             end
     end;
@@ -136,9 +132,6 @@ is_operation({add, {Id, Score}}) when is_integer(Id), is_integer(Score) -> true;
 is_operation({ban, Id}) when is_integer(Id) -> true;
 is_operation(_) -> false.
 
-%% @doc Verifies if the operation is tagged as replicate or not.
-%%      This is used by the transaction buffer to only send replicate operations
-%%      to a subset of data centers.
 -spec is_replicate_tagged(term()) -> boolean().
 is_replicate_tagged({add_r, _}) -> true;
 is_replicate_tagged(_) -> false.
@@ -189,7 +182,8 @@ compact_ops({ban, _Id1}, {ban, Id2}) ->
 require_state_downstream(_) ->
     true.
 
-% Priv
+%%%% Private
+
 -spec add(playerid(), score(), state()) -> {ok, state()} | {ok, state(), [downstream()]}.
 add(Id, Score, {Observed, Masked, Bans, {MinId, MinScore} = Min, Size} = Leaderboard) ->
     case sets:is_element(Id, Bans) of
@@ -230,7 +224,7 @@ add(Id, Score, {Observed, Masked, Bans, {MinId, MinScore} = Min, Size} = Leaderb
                         false ->
                             NewObserved = maps:put(Id, Score, Observed),
                             NewMin = case Min == {nil, nil} orelse cmp(Min, {Id, Score}) of
-                                true -> min(NewObserved);
+                                true -> {Id, Score};
                                 false -> Min
                             end,
                             {ok, {NewObserved, Masked, Bans, NewMin, Size}}
@@ -239,39 +233,37 @@ add(Id, Score, {Observed, Masked, Bans, {MinId, MinScore} = Min, Size} = Leaderb
     end.
 
 -spec ban(playerid(), state()) -> {ok, state()} | {ok, state(), [downstream()]}.
-ban(Id, {Observed, Masked, Bans, Min, Size}) ->
+ban(Id, {Observed, Masked, Bans, {MinId, _ } = Min, Size}) ->
+    Masked1 = maps:remove(Id, Masked),
+    Observed1 = maps:remove(Id, Observed),
+    Bans1 = sets:add_element(Id, Bans),
     case maps:is_key(Id, Observed) of
         true ->
-            Observed1 = maps:remove(Id, Observed),
-            NewBans = sets:add_element(Id, Bans),
             NewElem = get_largest(Masked),
             case NewElem of
                 {nil, nil} ->
-                    NewMin = case maps:size(Observed1) of
-                        0 -> {nil, nil};
+                    Min1 = case MinId of
+                        Id -> min(Observed1);
                         _ -> Min
                     end,
-                    {ok, {Observed1, Masked, NewBans, NewMin, Size}};
+                    {ok, {Observed1, Masked1, Bans1, Min1, Size}};
                 {NewId, NewScore} ->
-                    NewMasked = maps:remove(NewId, Masked),
-                    NewObserved = maps:put(NewId, NewScore, Observed1),
-                    NewMin = min(NewObserved),
-                    {ok, {NewObserved, NewMasked, NewBans, NewMin, Size}, [{add, NewElem}]}
+                    Masked2 = maps:remove(NewId, Masked1),
+                    Observed2 = maps:put(NewId, NewScore, Observed1),
+                    Min1 = NewElem,
+                    {ok, {Observed2, Masked2, Bans1, Min1, Size}, [{add, NewElem}]}
             end;
-        false ->
-            NewMasked = maps:remove(Id, Masked),
-            NewBans = sets:add_element(Id, Bans),
-            {ok, {Observed, NewMasked, NewBans, Min, Size}}
+        false -> {ok, {Observed1, Masked1, Bans1, Min, Size}}
     end.
 
--spec cmp(min(), min()) -> boolean().
+-spec cmp(pair(), pair()) -> boolean().
 cmp({nil, nil}, _) -> false;
 cmp(_, {nil, nil}) -> true;
 cmp({Id1, Score1}, {Id2, Score2}) ->
     Score1 > Score2
     orelse (Score1 == Score2 andalso Id1 > Id2).
 
--spec min(obs_state()) -> min().
+-spec min(obs_state()) -> pair().
 min(Observed) ->
     List = maps:to_list(Observed),
     case List of
@@ -279,7 +271,7 @@ min(Observed) ->
         _ -> hd(lists:sort(fun(X, Y) -> cmp(Y, X) end, List))
     end.
 
--spec get_largest(mask_state()) -> pair() | {nil, nil}.
+-spec get_largest(mask_state()) -> pair().
 get_largest(Masked) ->
     List = maps:to_list(Masked),
     case List of
@@ -287,9 +279,8 @@ get_largest(Masked) ->
         _ -> hd(lists:sort(fun(X, Y) -> cmp(X, Y) end, List))
     end.
 
-%% ===================================================================
-%% EUnit tests
-%% ===================================================================
+%%%%  EUnit tests
+
 -ifdef(TEST).
 
 create_test() ->
