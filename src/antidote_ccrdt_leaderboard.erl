@@ -17,9 +17,9 @@
 %% under the License.
 %%
 %% -------------------------------------------------------------------
-
+%%
 %% antidote_ccrdt_leaderboard:
-%% A computational CRDT that computes a topk with support for permanent player removal.
+%% A computational CRDT that computes a top-K with support for permanent player removal.
 %% Unlike in the antidote_ccrdt_topkd_rmv data type which supports add-wins semantics,
 %% a remove operation in this data type represents a permanent ban from the leaderboard
 %% for the given player. With these semantics, the data type does not need to maintain
@@ -27,29 +27,28 @@
 %% keep the highest score for each player.
 
 -module(antidote_ccrdt_leaderboard).
-
 -behaviour(antidote_ccrdt).
-
 -include("antidote_ccrdt.hrl").
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
--export([ new/0,
-          new/1,
-          value/1,
-          downstream/2,
-          update/2,
-          equal/2,
-          to_binary/1,
-          from_binary/1,
-          is_operation/1,
-          is_replicate_tagged/1,
-          can_compact/2,
-          compact_ops/2,
-          require_state_downstream/1
-        ]).
+-export([
+    new/0,
+    new/1,
+    value/1,
+    downstream/2,
+    update/2,
+    equal/2,
+    to_binary/1,
+    from_binary/1,
+    is_operation/1,
+    is_replicate_tagged/1,
+    can_compact/2,
+    compact_ops/2,
+    require_state_downstream/1
+]).
 
 -type playerid() :: integer().
 -type score() :: integer().
@@ -58,9 +57,9 @@
 -type obs_state() :: #{playerid() => score()}.
 -type mask_state() :: #{playerid() => score()}.
 -type bans() :: sets:set(playerid()).
--type size() :: non_neg_integer().
+-type size() :: pos_integer().
 
--type state() :: {
+-type leaderboard() :: {
     obs_state(),
     mask_state(),
     bans(),
@@ -68,22 +67,30 @@
     size()
 }.
 
--type prepare() :: {add, pair()} | {ban, playerid()}.
--type downstream() :: {add, pair()} | {ban, playerid()} | {add_r, pair()} | noop | {noop}.
+-type prepare_update() :: {add, pair()} | {ban, playerid()}.
+-type effect_update() :: {add, pair()} | {ban, playerid()} | {add_r, pair()}.
 
--spec new() -> state().
+%% Creates a new `leaderboard()` with a size of 100.
+-spec new() -> leaderboard().
 new() ->
     new(100).
 
--spec new(integer()) -> state().
+%% Creates a new `leaderboard()` with the given `Size`.
+-spec new(pos_integer()) -> leaderboard().
 new(Size) when is_integer(Size), Size > 0 ->
     {#{}, #{}, sets:new(), {nil, nil}, Size}.
 
--spec value(state()) -> [pair()].
+%% Returns the value of the `leaderboard()`.
+-spec value(leaderboard()) -> [pair()].
 value({Observed, _, _, _, _}) ->
     maps:to_list(Observed).
 
--spec downstream(prepare(), state()) -> {ok, downstream()}.
+%% Generates an `effect_update()` from a `prepare_update()`.
+%%
+%% The supported `prepare_update()` for this data type are:
+%% - `{add, {playerid(), score()}}`
+%% - `{ban, playerid()}`
+-spec downstream(prepare_update(), leaderboard()) -> {ok, effect_update() | noop}.
 downstream({add, {Id, Score} = Elem}, {Observed, Masked, Bans, Min, Size}) ->
     case sets:is_element(Id, Bans) of
         true -> {ok, noop};
@@ -108,7 +115,17 @@ downstream({ban, Id}, {_, _, Bans, _, _}) ->
         false -> {ok, {ban, Id}}
     end.
 
--spec update(downstream(), state()) -> {ok, state()} | {ok, state(), [downstream()]}.
+%% Executes an `effect_update()` operation and returns the resulting state.
+%%
+%% In the case where a ban removes elements from the observable
+%% state of the `leaderboard()` the returning tuple will also contain
+%% a list of `effect_update()` that must be propagated to remote replicas.
+%%
+%% The executable `effect_update()` for this data type are:
+%% - `{add, {playerid(), score()}}`
+%% - `{add_r, {playerid(), score()}}`
+%% - `{ban, playerid()}`
+-spec update(effect_update(), leaderboard()) -> {ok, leaderboard()} | {ok, leaderboard(), [effect_update()]}.
 update({add_r, {Id, Score}}, Leaderboard) when is_integer(Id), is_integer(Score) ->
     add(Id, Score, Leaderboard);
 update({add, {Id, Score}}, Leaderboard) when is_integer(Id), is_integer(Score) ->
@@ -116,27 +133,34 @@ update({add, {Id, Score}}, Leaderboard) when is_integer(Id), is_integer(Score) -
 update({ban, Id}, Leaderboard) when is_integer(Id) ->
     ban(Id, Leaderboard).
 
--spec equal(state(), state()) -> boolean().
+%% Compares the observable states of the two given `leaderboard()` states.
+-spec equal(leaderboard(), leaderboard()) -> boolean().
 equal({Observed1, _, _, _, Size1}, {Observed2, _, _, _, Size2}) ->
     Observed1 =:= Observed2 andalso Size1 =:= Size2.
 
--spec to_binary(state()) -> binary().
+%% Converts the given `leaderboard()` state into an Erlang `binary()`.
+-spec to_binary(leaderboard()) -> binary().
 to_binary(Leaderboard) ->
     term_to_binary(Leaderboard).
 
+%% Converts a given Erlang `binary()` into a `leaderboard()`.
+-spec from_binary(binary()) -> {ok, leaderboard()}.
 from_binary(Bin) ->
     {ok, binary_to_term(Bin)}.
 
--spec is_operation(term()) -> boolean().
+%% Checks if the given `prepare_update()` is supported by the `leaderboard()`.
+-spec is_operation(any()) -> boolean().
 is_operation({add, {Id, Score}}) when is_integer(Id), is_integer(Score) -> true;
 is_operation({ban, Id}) when is_integer(Id) -> true;
 is_operation(_) -> false.
 
--spec is_replicate_tagged(term()) -> boolean().
+%% Checks if the given `effect_update()` is tagged for replication.
+-spec is_replicate_tagged(effect_update()) -> boolean().
 is_replicate_tagged({add_r, _}) -> true;
 is_replicate_tagged(_) -> false.
 
--spec can_compact(downstream(), downstream()) -> boolean().
+%% Checks if the given `effect_update()` operations can be compacted.
+-spec can_compact(effect_update(), effect_update()) -> boolean().
 can_compact({add, {Id1, _}}, {add, {Id2, _}}) -> Id1 == Id2;
 can_compact({add_r, {Id1, _}}, {add, {Id2, _}}) -> Id1 == Id2;
 can_compact({add, {Id1, _}}, {add_r, {Id2, _}}) -> Id1 == Id2;
@@ -149,7 +173,8 @@ can_compact({ban, Id1}, {ban, Id2}) -> Id1 == Id2;
 
 can_compact(_, _) -> false.
 
--spec compact_ops(downstream(), downstream()) -> {downstream(), downstream()}.
+%% Compacts the given `effect_update()` operations.
+-spec compact_ops(effect_update(), effect_update()) -> {effect_update() | {noop}, effect_update() | {noop}}.
 compact_ops({add, {_, Score1}} = Op1, {add, {_, Score2}} = Op2) ->
     case Score1 > Score2 of
         true -> {Op1, {noop}};
@@ -179,15 +204,18 @@ compact_ops({add, _}, {ban, Id2}) ->
 compact_ops({ban, _Id1}, {ban, Id2}) ->
     {{noop}, {ban, Id2}}.
 
-require_state_downstream(_) ->
-    true.
+%% Checks if the data type needs to know its current state to generate
+%% `update_effect()` operations.
+-spec require_state_downstream(any()) -> boolean().
+require_state_downstream(_) -> true.
 
 %%%% Private
 
--spec add(playerid(), score(), state()) -> {ok, state()} | {ok, state(), [downstream()]}.
+%% Attempts to add the `playerid()`, `score()` pair to the `leaderboard()`.
+-spec add(playerid(), score(), leaderboard()) -> {ok, leaderboard()} | {ok, leaderboard(), [effect_update()]}.
 add(Id, Score, {Observed, Masked, Bans, {MinId, MinScore} = Min, Size} = Leaderboard) ->
     case sets:is_element(Id, Bans) of
-        true -> {ok, Leaderboard, [{ban, Id}]};
+        true -> {ok, Leaderboard};
         false ->
             case maps:is_key(Id, Observed) of
                 true ->
@@ -232,7 +260,8 @@ add(Id, Score, {Observed, Masked, Bans, {MinId, MinScore} = Min, Size} = Leaderb
             end
     end.
 
--spec ban(playerid(), state()) -> {ok, state()} | {ok, state(), [downstream()]}.
+%% Bans `playerid()` from the `leaderboard()`.
+-spec ban(playerid(), leaderboard()) -> {ok, leaderboard()} | {ok, leaderboard(), [effect_update()]}.
 ban(Id, {Observed, Masked, Bans, {MinId, _ } = Min, Size}) ->
     Masked1 = maps:remove(Id, Masked),
     Observed1 = maps:remove(Id, Observed),
@@ -256,6 +285,7 @@ ban(Id, {Observed, Masked, Bans, {MinId, _ } = Min, Size}) ->
         false -> {ok, {Observed1, Masked1, Bans1, Min, Size}}
     end.
 
+%% Compares two `pair()`.
 -spec cmp(pair(), pair()) -> boolean().
 cmp({nil, nil}, _) -> false;
 cmp(_, {nil, nil}) -> true;
@@ -263,6 +293,7 @@ cmp({Id1, Score1}, {Id2, Score2}) ->
     Score1 > Score2
     orelse (Score1 == Score2 andalso Id1 > Id2).
 
+%% Finds the minimum `pair()` in the `leaderboard()` observable state.
 -spec min(obs_state()) -> pair().
 min(Observed) ->
     List = maps:to_list(Observed),
@@ -271,6 +302,7 @@ min(Observed) ->
         _ -> hd(lists:sort(fun(X, Y) -> cmp(Y, X) end, List))
     end.
 
+%% Finds the maximum `pair()` in the `leaderboard()` masked state.
 -spec get_largest(mask_state()) -> pair().
 get_largest(Masked) ->
     List = maps:to_list(Masked),
@@ -283,12 +315,14 @@ get_largest(Masked) ->
 
 -ifdef(TEST).
 
+%% Tests the `new/0` and `new/1` functions.
 create_test() ->
     L1 = new(),
     L2 = new(100),
     ?assertEqual(L1, {#{}, #{}, sets:new(), {nil, nil}, 100}),
     ?assertEqual(L1, L2).
 
+%% Tests the `cmp/2` function.
 cmp_test() ->
     ?assertEqual(cmp({nil, nil}, {nil, nil}), false),
     ?assertEqual(cmp({nil, nil}, {1, 2}), false),
@@ -299,6 +333,9 @@ cmp_test() ->
     ?assertEqual(cmp({1, 3}, {1, 2}), true),
     ?assertEqual(cmp({2, 2}, {1, 2}), true).
 
+%% Tests the excution of several `prepare_update()` operations and
+%% `effect_update()` operations, verifying the `leaderboard()` state
+%% between executions.
 mixed_test() ->
     Size = 2,
     L = new(Size),
@@ -379,6 +416,7 @@ mixed_test() ->
     ?assertEqual(downstream({add, BannedElem}, L6), {ok, noop}),
     ?assertEqual(downstream({ban, Id4}, L6), {ok, noop}).
 
+%% Tests adding a `pair()` and then banning the `playerid()`.
 ban_after_add_test() ->
     Size = 2,
     L = new(Size),
@@ -408,6 +446,7 @@ ban_after_add_test() ->
                       {nil, nil},
                       Size}).
 
+%% Tests a ban edge case.
 ban_test() ->
     Size = 2,
     L = new(Size),
@@ -451,14 +490,16 @@ ban_test() ->
                       Elem2,
                       Size}).
 
+%% Tests adding a `pair()` after its `playerid()` has been banned.
 add_after_ban_test() ->
     L1 = new(),
     Id = 5,
     {ok, L2} = update({ban, Id}, L1),
-    {ok, L3, [Generated]} = update({add, {Id, 30}}, L2),
-    ?assertEqual(Generated, {ban, Id}),
+    {ok, L3} = update({add, {Id, 30}}, L2),
     ?assertEqual(L2, L3).
 
+%% Tests the execution of `effect_update()` operations which should not modify
+%% the state of the `leaderboard()`.
 noop_add_test() ->
     L1 = new(1),
     Id = 5,
@@ -471,6 +512,7 @@ noop_add_test() ->
     {ok, L5} = update({add, {Id2, 6}}, L4),
     ?assertEqual(L4, L5).
 
+%% Tests banning the minimum element, when a replacement for it exists in the `mask_state()`.
 ban_min_with_replacement_test() ->
     Size = 2,
     L = new(Size),
@@ -529,6 +571,7 @@ ban_min_with_replacement_test() ->
                       Elem2,
                       Size}).
 
+%% Tests the addition of several `pair()` to trigger edge cases.
 add_several_test() ->
     L1 = new(2),
     Elem1 = {5, 50},
@@ -583,6 +626,7 @@ add_several_test() ->
     {ok, DOp6} = downstream({add, Elem6}, L6),
     ?assertEqual(Op6, DOp6).
 
+%% Tests the `value/1` function.
 value_test() ->
     L1 = new(),
     ?assertEqual(value(L1), []),
@@ -591,14 +635,23 @@ value_test() ->
     {ok, L3} = update({add, {45, 6}}, L2),
     ?assertEqual(value(L3), [{45, 6}, {50, 5}]).
 
+%% Tests the `min/1` function.
 min_test() ->
     ?assertEqual(min(#{}), {nil, nil}),
     ?assertEqual(min(#{1 => 1}), {1, 1}),
     ?assertEqual(min(#{1 => 1, 2 => 5}), {1, 1}).
 
+%% Tests the `get_largest/1` function.
 largest_test() ->
     ?assertEqual(get_largest(#{}), {nil, nil}),
     ?assertEqual(get_largest(#{1 => 1}), {1, 1}),
     ?assertEqual(get_largest(#{1 => 1, 2 => 5}), {2, 5}).
+
+%% Tests the `to_binary/1` and `from_binary/1` functions.
+binary_test() ->
+    L = new(),
+    BinL = to_binary(L),
+    {ok, L1} = from_binary(BinL),
+    ?assert(equal(L, L1)).
 
 -endif.

@@ -17,128 +17,138 @@
 %% under the License.
 %%
 %% -------------------------------------------------------------------
-
-%% antidote_ccrdt_topk: A computational CRDT that computes a topk
+%%
+%% antidote_ccrdt_topk:
+%% A computational CRDT that computes a top-K.
 
 -module(antidote_ccrdt_topk).
-
 -behaviour(antidote_ccrdt).
-
 -include("antidote_ccrdt.hrl").
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
--export([ new/0,
-          new/1,
-          new/2,
-          value/1,
-          downstream/2,
-          update/2,
-          equal/2,
-          to_binary/1,
-          from_binary/1,
-          is_operation/1,
-          is_replicate_tagged/1,
-          can_compact/2,
-          compact_ops/2,
-          require_state_downstream/1
-        ]).
+-export([
+    new/0,
+    new/1,
+    new/2,
+    value/1,
+    downstream/2,
+    update/2,
+    equal/2,
+    to_binary/1,
+    from_binary/1,
+    is_operation/1,
+    is_replicate_tagged/1,
+    can_compact/2,
+    compact_ops/2,
+    require_state_downstream/1
+]).
+
+-type playerid() :: integer().
+-type score() :: integer().
+-type pair() :: {playerid(), score()} | {nil, nil}.
 
 -type observable() :: #{integer() => integer()}.
--type top_pair() :: {integer(), integer()} | {nil, nil}.
--type topk() :: {observable(), top_pair() , integer()}.
--type topk_update() :: {add, top_pair()}.
--type topk_effect() :: {add, top_pair()} | {noop}.
+-type size() :: pos_integer().
 
-%% @doc Create a new, empty 'topk()'
+-type topk() :: {
+    observable(),
+    pair(),
+    size()
+}.
+
+-type prepare_update() :: {add, pair()}.
+-type effect_update() :: {add, pair()}.
+
+%% Creates a new `topk()` with a size of 100.
 -spec new() -> topk().
 new() ->
     new(100).
 
-%% @doc Create a new, empty 'topk()'
+%% Creates a new `topk()` with the given `Size`.
 -spec new(pos_integer()) -> topk().
 new(Size) when is_integer(Size), Size > 0 ->
     {#{}, {nil, nil}, Size}.
 
-%% @doc Create 'topk()' with initial values
+%% Creates a new `topk()` with the given `Topk` and `Size`.
 -spec new(observable(), pos_integer()) -> topk().
 new(Topk, Size) when is_integer(Size), Size > 0 ->
     {Topk, min(Topk), Size};
 new(_, _) ->
     new().
 
-%% @doc The single, total value of a `topk()'
+%% Returns the value of the `topk()`.
 -spec value(topk()) -> list().
 value({Top, _, _}) ->
     maps:to_list(Top).
 
-%% @doc Generate a downstream operation.
-%% The first parameter is the tuple `{add, {Id, Score}}`.
-%% The second parameter is the top-k ccrdt although it isn't used.
--spec downstream(topk_update(), topk()) -> {ok, topk_effect()}.
+%% Generates an `effect_update()` from a `prepare_update()`.
+%%
+%% The supported `prepare_update()` for this data type are:
+%% - `{add, pair()}`
+-spec downstream(prepare_update(), topk()) -> {ok, effect_update() | noop}.
 downstream({add, Elem}, Top) ->
     case changes_state(Elem, Top) of
         true -> {ok, {add, Elem}};
         false -> {ok, noop}
     end.
 
-%% @doc Update a `topk()'.
-%% The first argument is the tuple `{add, top_pair()}`.
-%% The 2nd argument is the `topk()' to update.
+%% Executes an `effect_update()` operation and returns the resulting state.
 %%
-%% returns the updated `topk()'
--spec update(topk_effect(), topk()) -> {ok, topk()}.
+%% The executable `effect_update()` for this data type are:
+%% - `{add, pair()}`
+-spec update(effect_update(), topk()) -> {ok, topk()}.
 update({add, {Id, Score}}, TopK) when is_integer(Id), is_integer(Score) ->
     {ok, add(Id, Score, TopK)}.
 
-%% @doc Compare if two `topk()' are equal. Only returns `true()' if both
-%% the top-k contain the same elements.
+%% Compares the two given `topk()` states.
 -spec equal(topk(), topk()) -> boolean().
 equal({Top1, Min1, Size1}, {Top2, Min2, Size2}) ->
     Top1 =:= Top2 andalso Size1 =:= Size2 andalso Min1 =:= Min2.
 
+%% Converts the given `topk()` state into an Erlang `binary()`.
 -spec to_binary(topk()) -> binary().
 to_binary(TopK) ->
     term_to_binary(TopK).
 
+%% Converts a given Erlang `binary()` into a `topk()`.
+-spec from_binary(binary()) -> {ok, topk()}.
 from_binary(Bin) ->
-    %% @TODO something smarter
     {ok, binary_to_term(Bin)}.
 
-%% @doc The following operation verifies
-%%      that Operation is supported by this particular CCRDT.
--spec is_operation(term()) -> boolean().
+%% Checks if the given `prepare_update()` is supported by the `topk()`.
+-spec is_operation(any()) -> boolean().
 is_operation({add, {Id, Score}}) when is_integer(Id), is_integer(Score) -> true;
 is_operation(_) -> false.
 
-%% @doc Verifies if the operation is tagged as replicate or not.
-%%      This is used by the transaction buffer to only send replicate operations
-%%      to a subset of data centers.
--spec is_replicate_tagged(term()) -> boolean().
+%% Checks if the given `effect_update()` is tagged for replication.
+-spec is_replicate_tagged(effect_update()) -> boolean().
 is_replicate_tagged(_) -> false.
 
-
--spec can_compact(topk_effect(), topk_effect()) -> boolean().
+%% Checks if the given `effect_update()` operations can be compacted.
+-spec can_compact(effect_update(), effect_update()) -> boolean().
 can_compact({add, {Id1, _}}, {add, {Id2, _}}) ->
     Id1 == Id2.
 
--spec compact_ops(topk_effect(), topk_effect()) -> {topk_effect(), topk_effect()}.
+%% Compacts the given `effect_update()` operations.
+-spec compact_ops(effect_update(), effect_update()) -> {effect_update(), effect_update()}.
 compact_ops({add, {Id1, Score1}}, {add, {Id2, Score2}}) ->
     case Score1 > Score2 of
         true -> {{add, {Id1, Score1}}, {noop}};
         false -> {{noop}, {add, {Id2, Score2}}}
     end.
 
-%% @doc Returns true if ?MODULE:downstream/2 needs the state of crdt
-%%      to generate downstream effect
-require_state_downstream(_) ->
-    true.
+%% Checks if the data type needs to know its current state to generate
+%% `update_effect()` operations.
+-spec require_state_downstream(any()) -> boolean().
+require_state_downstream(_) -> true.
 
+%%%% Private
 
-% Priv
--spec add(integer(), pos_integer(), topk()) -> topk().
+%% Attempts to add the `playerid()`, `score()` pair to the `topk()`.
+-spec add(playerid(), score(), topk()) -> topk().
 add(Id, Score, {Top, {MinId, _} = Min, Size}) ->
     {NewTop, NewMin} = case maps:is_key(Id, Top) of
         true ->
@@ -171,7 +181,8 @@ add(Id, Score, {Top, {MinId, _} = Min, Size}) ->
     end,
     {NewTop, NewMin, Size}.
 
--spec changes_state(top_pair(), topk()) -> boolean().
+%% Checks if attempting to add the given `pair()` to the `topk()` will alter its state.
+-spec changes_state(pair(), topk()) -> boolean().
 changes_state({Id, Score} = Elem, {Top, Min, Size}) ->
     case maps:size(Top) == Size of
         true ->
@@ -186,12 +197,14 @@ changes_state({Id, Score} = Elem, {Top, Min, Size}) ->
             end
     end.
 
--spec cmp(top_pair(), top_pair()) -> boolean().
+%% Compares two `pair()`.
+-spec cmp(pair(), pair()) -> boolean().
 cmp(_, {nil, nil}) -> true;
 cmp({Id1, Score1}, {Id2, Score2}) ->
     Score1 > Score2 orelse (Score1 == Score2 andalso Id1 > Id2).
 
--spec min(map()) -> top_pair().
+%% Finds the minimum `pair()` in the `topk()` observable state.
+-spec min(observable()) -> pair().
 min(Top) ->
     List = maps:to_list(Top),
     SortedList = lists:sort(fun(X, Y) -> cmp(Y, X) end, List),
@@ -202,14 +215,16 @@ min(Top) ->
 %% ===================================================================
 -ifdef(TEST).
 
+%% Tests the `new/0` function.
 new_test() ->
     ?assertEqual({#{}, {nil, nil}, 100}, new()).
 
-%% @doc test the correctness of `value()' function
+%% Tests the `value/1` function.
 value_test() ->
     Top = {#{1 => 2, 2 => 2}, {1, 2}, 25},
     ?assertEqual(sets:from_list([{2,2}, {1, 2}]), sets:from_list(value(Top))).
 
+%% Tests several `prepare_update()` operations.
 downstream_add_test() ->
     Top = {#{1 => 2, 2 => 2}, {1, 2}, 3},
     {ok, noop} = downstream({add, {1, 1}}, Top),
@@ -220,7 +235,7 @@ downstream_add_test() ->
     {ok, {add, {1, 3}}} = downstream({add, {1, 3}}, Top),
     {ok, {add, {3, 2}}} = downstream({add, {3, 2}}, Top).
 
-%% @doc test the correctness of add.
+%% Tests several `effect_update()` operations.
 update_add_test() ->
     Top0 = new(2),
     {ok, Top1} = update({add, {1, 5}}, Top0),
@@ -230,6 +245,7 @@ update_add_test() ->
     {ok, Top5} = update({add, {3, 3}}, Top4),
     ?assertEqual([{1, 5}, {3,3}], value(Top5)).
 
+%% Tests the `equal/2` function.
 equal_test() ->
     Top1 = {#{1 => 2}, {1, 2}, 5},
     Top2 = {#{1 => 2}, {1, 2}, 25},
@@ -237,6 +253,7 @@ equal_test() ->
     ?assertNot(equal(Top1, Top2)),
     ?assert(equal(Top2, Top3)).
 
+%% Tests the `to_binary/1` and `from_binary/1` functions.
 binary_test() ->
     Top1 = {#{1 => 2}, {1, 2}, 5},
     BinaryTop1 = to_binary(Top1),

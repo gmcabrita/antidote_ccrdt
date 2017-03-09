@@ -17,14 +17,12 @@
 %% under the License.
 %%
 %% -------------------------------------------------------------------
-
+%%
 %% antidote_ccrdt_topk_rmv:
-%% A computational CRDT that computes a topk with support for element removal.
+%% A computational CRDT that computes a top-K with support for element removal.
 
 -module(antidote_ccrdt_topk_rmv).
-
 -behaviour(antidote_ccrdt).
-
 -include("antidote_ccrdt.hrl").
 
 -ifdef(TEST).
@@ -36,69 +34,72 @@
 -define(DC_META_DATA, dc_meta_data_utilities).
 -endif.
 
--export([ new/0,
-          new/1,
-          value/1,
-          downstream/2,
-          update/2,
-          equal/2,
-          to_binary/1,
-          from_binary/1,
-          is_operation/1,
-          is_replicate_tagged/1,
-          can_compact/2,
-          compact_ops/2,
-          require_state_downstream/1
-        ]).
+-export([
+    new/0,
+    new/1,
+    value/1,
+    downstream/2,
+    update/2,
+    equal/2,
+    to_binary/1,
+    from_binary/1,
+    is_operation/1,
+    is_replicate_tagged/1,
+    can_compact/2,
+    compact_ops/2,
+    require_state_downstream/1
+]).
 
 -type size() :: pos_integer().
 -type playerid() :: integer().
--type score() :: integer().
+-type score() :: pos_integer().
 -type timestamp() :: integer().
 -type dcid_timestamp() :: {dcid(), timestamp()}.
 
 -type pair() :: {playerid(), score(), dcid_timestamp()}.
--type pair_internal() :: {score(), playerid(), dcid_timestamp()}.
+-type pair_internal() :: {score(), playerid(), dcid_timestamp()} | {nil, nil, nil}.
 
 -type obs_state() :: #{playerid() => pair_internal()}.
 -type mask_state() :: #{playerid() => gb_sets:set(pair_internal())}.
 -type removals() :: #{playerid() => vc()}.
 -type vc() :: #{dcid() => timestamp()}.
--type minimum() :: pair_internal() | {nil, nil, nil}.
 
--type state() :: {
+-type topkrmv() :: {
     obs_state(),
     mask_state(),
     removals(),
     vc(),
-    minimum(),
+    pair_internal(),
     size()
 }.
 
--type prepare() :: {add, {playerid(), score()}} |
-                  {rmv, playerid()}.
--type downstream() :: {add, pair()} |
-                  {rmv, {playerid(), vc()}} |
-                  {add_r, pair()} |
-                  {rmv_r, {playerid(), vc()}} |
-                  noop |
-                  {noop}.
+-type prepare_update() :: {add, {playerid(), score()}} | {rmv, playerid()}.
+-type effect_update() :: {add, pair()} | {rmv, {playerid(), vc()}} |
+                         {add_r, pair()} | {rmv_r, {playerid(), vc()}}.
 
--spec new() -> state().
+%% Creates a new `topkrmv()` with a size of 100.
+-spec new() -> topkrmv().
 new() ->
     new(100).
 
--spec new(integer()) -> state().
+%% Creates a new `topkrmv()` with the given `Size`.
+-spec new(pos_integer()) -> topkrmv().
 new(Size) when is_integer(Size), Size > 0 ->
     {#{}, #{}, #{}, #{}, {nil, nil, nil}, Size}.
 
--spec value(state()) -> [{playerid(), score()}].
+%% Returns the value of the `topkrmv()`.
+-spec value(topkrmv()) -> [{playerid(), score()}].
 value({External, _, _, _, _, _}) ->
     maps:fold(fun(_, {Score, Id, _}, Acc) ->
         [{Id, Score} | Acc]
     end, [], External).
 
--spec downstream(prepare(), state()) -> {ok, downstream()}.
+%% Generates an `effect_update()` from a `prepare_update()`.
+%%
+%% The supported `prepare_update()` for this data type are:
+%% - `{add, {playerid(), score()}}`
+%% - `{rmv, playerid()}`
+-spec downstream(prepare_update(), topkrmv()) -> {ok, effect_update() | noop}.
 downstream({add, {Id, Score}}, {Observed, _, _, _, Min, _Size}) ->
     {DcId, _} = ?DC_META_DATA:get_my_dc_id(),
     Ts = {DcId, ?TIME:system_time(milli_seconds)},
@@ -122,7 +123,21 @@ downstream({rmv, Id}, {Observed, Masked, _, Vc, _, _}) ->
             end
     end.
 
--spec update(downstream(), state()) -> {ok, state()} | {ok, state(), [downstream()]}.
+%% Executes an `effect_update()` operation and returns the resulting state.
+%%
+%% In the case where a `rmv` removes elements from the observable
+%% state of the `topkrmv()` the returning tuple will also contain
+%% a list of `effect_update()` that must be propagated to remote replicas.
+%%
+%% The same happens when an element that has been previously removed from
+%% the `topkrmv()` is later added.
+%%
+%% The executable `effect_update()` for this data type are:
+%% - `{add, pair()}`
+%% - `{add_r, pair()}`
+%% - `{rmv, {playerid(), vc()}}`
+%% - `{rmv_r, {playerid(), vc()}}`
+-spec update(effect_update(), topkrmv()) -> {ok, topkrmv()} | {ok, topkrmv(), [effect_update()]}.
 update({add_r, {Id, Score, Ts}}, TopK) when is_integer(Id), is_integer(Score) ->
     add(Id, Score, Ts, TopK);
 update({add, {Id, Score, Ts}}, TopK) when is_integer(Id), is_integer(Score) ->
@@ -132,31 +147,35 @@ update({rmv_r, {Id, Vc}}, TopK) when is_integer(Id), is_map(Vc) ->
 update({rmv, {Id, Vc}}, TopK) when is_integer(Id), is_map(Vc) ->
     rmv(Id, Vc, TopK).
 
--spec equal(state(), state()) -> boolean().
+%% Compares the observable states of the two given `topkrmv()` states.
+-spec equal(topkrmv(), topkrmv()) -> boolean().
 equal({Observed1, _, _, _, _, Size1}, {Observed2, _, _, _, _, Size2}) ->
     Observed1 =:= Observed2 andalso Size1 =:= Size2.
 
--spec to_binary(state()) -> binary().
+%% Converts the given `topkrmv()` state into an Erlang `binary()`.
+-spec to_binary(topkrmv()) -> binary().
 to_binary(TopK) ->
     term_to_binary(TopK).
 
+%% Converts a given Erlang `binary()` into a `topkrmv()`.
+-spec from_binary(binary()) -> {ok, topkrmv()}.
 from_binary(Bin) ->
     {ok, binary_to_term(Bin)}.
 
--spec is_operation(term()) -> boolean().
+%% Checks if the given `prepare_update()` is supported by the `topkrmv()`.
+-spec is_operation(any()) -> boolean().
 is_operation({add, {Id, Score}}) when is_integer(Id), is_integer(Score) -> true;
 is_operation({rmv, Id}) when is_integer(Id) -> true;
 is_operation(_) -> false.
 
-%% @doc Verifies if the operation is tagged as replicate or not.
-%%      This is used by the transaction buffer to only send replicate operations
-%%      to a subset of data centers.
--spec is_replicate_tagged(term()) -> boolean().
+%% Checks if the given `effect_update()` is tagged for replication.
+-spec is_replicate_tagged(effect_update()) -> boolean().
 is_replicate_tagged({add_r, _}) -> true;
 is_replicate_tagged({rmv_r, _}) -> true;
 is_replicate_tagged(_) -> false.
 
--spec can_compact(downstream(), downstream()) -> boolean().
+%% Checks if the given `effect_update()` operations can be compacted.
+-spec can_compact(effect_update(), effect_update()) -> boolean().
 can_compact({add, {Id1, _, _}}, {add, {Id2, _, _}}) -> Id1 == Id2;
 can_compact({add_r, {Id1, _, _}}, {add, {Id2, _, _}}) -> Id1 == Id2;
 
@@ -174,7 +193,8 @@ can_compact({rmv, {Id1, _}}, {rmv, {Id2, _}}) -> Id1 == Id2;
 
 can_compact(_, _) -> false.
 
--spec compact_ops(downstream(), downstream()) -> {downstream(), downstream()}.
+%% Compacts the given `effect_update()` operations.
+-spec compact_ops(effect_update(), effect_update()) -> {effect_update() | {noop}, effect_update() | {noop}}.
 compact_ops({add, {Id1, Score1, Ts1}}, {add, {Id2, Score2, Ts2}}) ->
     case Score1 > Score2 of
         true -> {{add, {Id1, Score1, Ts1}}, {add_r, {Id2, Score2, Ts2}}};
@@ -205,8 +225,10 @@ compact_ops({rmv, {_Id1, Vc1}}, {rmv, {Id2, Vc2}}) ->
 require_state_downstream(_) ->
     true.
 
-% Priv
--spec add(playerid(), score(), dcid_timestamp(), state()) -> {ok, state()} | {ok, state(), [downstream()]}.
+%%%% Private
+
+%% Attempts to add the `playerid()`, `score()`, `dcid_timestamp()` pair to the `topkrmv()`.
+-spec add(playerid(), score(), dcid_timestamp(), topkrmv()) -> {ok, topkrmv()} | {ok, topkrmv(), [effect_update()]}.
 add(Id, Score, {DcId, Timestamp} = Ts, {Observed, Masked, Removals, Vc, Min, Size}) ->
     Vc1 = vc_update(Vc, DcId, Timestamp),
     case removals_get_timestamp(Removals, Id, DcId) >= Timestamp of
@@ -226,7 +248,8 @@ add(Id, Score, {DcId, Timestamp} = Ts, {Observed, Masked, Removals, Vc, Min, Siz
             {ok, {Observed1, Masked1, Removals, Vc1, Min1, Size}}
     end.
 
--spec rmv(playerid(), vc(), state()) -> {ok, state()} | {ok, state(), [downstream()]}.
+%% Removes all the pairs affect by `playerid()` and `vc()` from the `topkrmv()`.
+-spec rmv(playerid(), vc(), topkrmv()) -> {ok, topkrmv()} | {ok, topkrmv(), [effect_update()]}.
 rmv(Id, VcRmv, {Observed, Masked, Removals, Vc, Min, Size}) ->
     NewRemovals = merge_vc(Removals, Id, VcRmv),
     NewMasked = case maps:is_key(Id, Masked) of
@@ -274,7 +297,8 @@ rmv(Id, VcRmv, {Observed, Masked, Removals, Vc, Min, Size}) ->
         false -> {ok, {Observed, NewMasked, NewRemovals, Vc, Min, Size}}
     end.
 
--spec recompute_observed(obs_state(), minimum(), size(), playerid(), pair_internal()) -> {obs_state(), minimum()}.
+%% Recomputes the observable state of the `topkrmv()` given the new `Elem` that is being added.
+-spec recompute_observed(obs_state(), pair_internal(), size(), playerid(), pair_internal()) -> {obs_state(), pair_internal()}.
 recompute_observed(Observed, {_, MinId, _} = Min, Size, Id, Elem) ->
     case maps:is_key(Id, Observed) of
         true ->
@@ -309,10 +333,12 @@ recompute_observed(Observed, {_, MinId, _} = Min, Size, Id, Elem) ->
             end
     end.
 
+%% Retrieves the `timestamp()` of a `playerid()` removal given a `dcid()`.
 -spec removals_get_timestamp(removals(), playerid(), dcid()) -> timestamp().
 removals_get_timestamp(Deletes, Id, DcId) ->
     vc_get_timestamp(removals_get_vc(Deletes, Id), DcId).
 
+%% Retrieves the `vc()` of a `playerid()`.
 -spec removals_get_vc(removals(), playerid()) -> vc().
 removals_get_vc(Deletes, Id) ->
     case maps:is_key(Id, Deletes) of
@@ -320,6 +346,7 @@ removals_get_vc(Deletes, Id) ->
         false -> #{}
     end.
 
+%% Retrieves the `timestamp()` from a `vc()` given a `dcid()`.
 -spec vc_get_timestamp(vc(), dcid()) -> timestamp().
 vc_get_timestamp(Vc, DcId) ->
     case maps:is_key(DcId, Vc) of
@@ -327,6 +354,7 @@ vc_get_timestamp(Vc, DcId) ->
         false -> 0
     end.
 
+%% Updates a `vc()` given a `dcid()` and a `timestamp()`.
 -spec vc_update(vc(), dcid(), timestamp()) -> vc().
 vc_update(Vc, DcId, Timestamp) ->
     case maps:is_key(DcId, Vc) of
@@ -337,6 +365,7 @@ vc_update(Vc, DcId, Timestamp) ->
         false -> maps:put(DcId, Timestamp, Vc)
     end.
 
+%% Merges a `vc()` into `removals()` given the corresponding `playerid()`.
 -spec merge_vc(removals(), playerid(), vc()) -> removals().
 merge_vc(Deletes, Id, Vc) ->
     NewVc = case maps:is_key(Id, Deletes) of
@@ -345,6 +374,7 @@ merge_vc(Deletes, Id, Vc) ->
     end,
     maps:put(Id, NewVc, Deletes).
 
+%% Merges two `vc()`.
 -spec merge_vcs(vc(), vc()) -> vc().
 merge_vcs(Vc1, Vc2) ->
     maps:fold(fun(K, Ts, Acc) ->
@@ -355,8 +385,8 @@ merge_vcs(Vc1, Vc2) ->
         maps:put(K, Max, Acc)
     end, Vc1, Vc2).
 
-
--spec cmp(minimum(), minimum()) -> boolean().
+%% Compares two `pair_internal()`.
+-spec cmp(pair_internal(), pair_internal()) -> boolean().
 cmp({nil, nil, nil}, _) -> false;
 cmp(_, {nil, nil, nil}) -> true;
 cmp({Score1, Id1, {_, Ts1}}, {Score2, Id2, {_, Ts2}}) ->
@@ -364,7 +394,8 @@ cmp({Score1, Id1, {_, Ts1}}, {Score2, Id2, {_, Ts2}}) ->
     orelse (Score1 == Score2 andalso Id1 > Id2)
     orelse (Score1 == Score2 andalso Id1 == Id2 andalso Ts1 > Ts2).
 
--spec min_observed(obs_state()) -> minimum().
+%% Finds the minimum `pair_internal()` in the `topkrmv()` observable state.
+-spec min_observed(obs_state()) -> pair_internal().
 min_observed(Observed) ->
     List = maps:values(Observed),
     case List of
@@ -379,7 +410,9 @@ min_observed(Observed) ->
 %% ===================================================================
 -ifdef(TEST).
 
-%% TODO: simplify tests
+%% Tests the excution of several `prepare_update()` operations and
+%% `effect_update()` operations, verifying the `leaderboard()` state
+%% between executions.
 mixed_test() ->
     ?TIME:start_link(),
     ?DC_META_DATA:start_link(),
@@ -485,6 +518,7 @@ mixed_test() ->
                         Elem4Internal,
                         Size}).
 
+%% Tests the removal of a masked element.
 masked_delete_test() ->
     ?TIME:start_link(),
     ?DC_META_DATA:start_link(),
@@ -519,6 +553,7 @@ masked_delete_test() ->
                         {42, 1, {MyDcId, {0, 0, 1}}},
                         1}).
 
+%% Tests `vc()` merging.
 simple_merge_vc_test() ->
     ?assertEqual(merge_vc(#{},
                           1,
@@ -533,6 +568,7 @@ simple_merge_vc_test() ->
                           #{a => {a, 5}}),
                  #{1 => #{a => {a, 5}}}).
 
+%% Tests the semantics of removal between different replicas.
 delete_semantics_test() ->
     ?TIME:start_link(),
     ?DC_META_DATA:start_link(),

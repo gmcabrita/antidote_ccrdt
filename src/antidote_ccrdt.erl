@@ -25,23 +25,29 @@
 
 -include("antidote_ccrdt.hrl").
 
--define(CCRDTS, [antidote_ccrdt_average,
-                 antidote_ccrdt_topk,
-                 antidote_ccrdt_topk_rmv,
-                 antidote_ccrdt_leaderboard]).
--define(PARTIALLY_INCREMENTAL, [antidote_ccrdt_topk_rmv,
-                                antidote_ccrdt_leaderboard]).
+-define(CCRDTS, [
+    antidote_ccrdt_average,
+    antidote_ccrdt_topk,
+    antidote_ccrdt_topk_rmv,
+    antidote_ccrdt_leaderboard
+]).
 
--export([is_type/1,
-         is_partially_incremental/1
-        ]).
+-define(PARTIALLY_INCREMENTAL, [
+    antidote_ccrdt_topk_rmv,
+    antidote_ccrdt_leaderboard
+]).
+
+-export([
+    is_type/1,
+    is_partially_incremental/1
+]).
 
 -callback new() -> ccrdt().
 -callback value(ccrdt()) -> value().
 -callback downstream(update(), ccrdt()) -> {ok, effect()} | {error, reason()}.
 -callback update(effect(), ccrdt()) ->  {ok, ccrdt()} | {ok, ccrdt(), [effect()]}.
 -callback require_state_downstream(update()) -> boolean().
--callback is_operation(update()) ->  boolean(). %% Type check
+-callback is_operation(update()) ->  boolean().
 -callback can_compact(effect(), effect()) -> boolean().
 -callback compact_ops(effect(), effect()) -> effect().
 -callback is_replicate_tagged(effect()) -> boolean().

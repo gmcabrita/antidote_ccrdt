@@ -17,70 +17,75 @@
 %% under the License.
 %%
 %% -------------------------------------------------------------------
-
-%% antidote_ccrdt_average: A computational CRDT that computes the average
+%%
+%% antidote_ccrdt_average:
+%% A computational CRDT that computes the aggregated average.
 
 -module(antidote_ccrdt_average).
-
 -behaviour(antidote_ccrdt).
-
 -include("antidote_ccrdt.hrl").
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
--export([ new/0,
-          new/2,
-          value/1,
-          downstream/2,
-          update/2,
-          equal/2,
-          to_binary/1,
-          from_binary/1,
-          is_operation/1,
-          is_replicate_tagged/1,
-          can_compact/2,
-          compact_ops/2,
-          require_state_downstream/1
-        ]).
+-export([
+    new/0,
+    new/2,
+    value/1,
+    downstream/2,
+    update/2,
+    equal/2,
+    to_binary/1,
+    from_binary/1,
+    is_operation/1,
+    is_replicate_tagged/1,
+    can_compact/2,
+    compact_ops/2,
+    require_state_downstream/1
+]).
 
--type average() :: {integer(), integer()}.
--type average_update() :: {add, integer()} | {add, {integer(), integer()}}.
--type average_effect() :: {add, {integer(), integer()}}.
+-type sum() :: non_neg_integer().
+-type num() :: non_neg_integer().
 
-%% @doc Create a new, empty 'average()'
+-type average() :: {sum(), num()}.
+-type prepare_update() :: {add, sum()} | {add, average()}.
+-type effect_update() :: {add, average()}.
+
+%% Creates a new `average()`.
+-spec new() -> average().
 new() ->
     {0, 0}.
 
-%% @doc Create 'average()' with initial values
--spec new(integer(), integer()) -> average().
-new(Sum, N) when is_integer(Sum), is_integer(N) ->
-    {Sum, N};
+%% Creates a new `average()` with the given `Sum` and `Num`.
+-spec new(sum(), num()) -> average().
+new(Sum, Num) when is_integer(Sum), is_integer(Num) ->
+    {Sum, Num};
 new(_, _) ->
     new().
 
-%% @doc The single, total value of an`average()'
+%% Returns the value of `average()`.
 -spec value(average()) -> float().
-value({Sum, N}) when is_integer(Sum), is_integer(N) ->
-    Sum / N.
+value({Sum, Num}) when is_integer(Sum), is_integer(Num) ->
+    Sum / Num.
 
-%% @doc Generate a downstream operation.
-%% The first parameter is either the tuple `{add, pos_integer()}`
-%% or `{add, {pos_integer(), pos_integer()}}`.
-%% The second parameter is the average ccrdt although it isn't used.
--spec downstream(average_update(), any()) -> {ok, average_effect()}.
-downstream({add, {Value, N}}, _Average) ->
+%% Generates an `effect_update()` operation from a `prepare_update()`.
+%%
+%% The supported `prepare_update()` operations for this data type are:
+%% - `{add, sum()}`
+%% - `{add, average()}`
+-spec downstream(prepare_update(), average()) -> {ok, effect_update()}.
+downstream({add, {Value, N}}, _) ->
     {ok, {add, {Value, N}}};
-downstream({add, Value}, _Average) ->
+downstream({add, Value}, _) ->
     {ok, {add, {Value, 1}}}.
 
-%% @doc Update an `average()'.
-%% The first argument is either the tuple `{add, integer()}` or `{add, {integer(), integer()}}`.
-%% The 2nd argument is the `average()' to update.
+%% Executes an `effect_update()` operation and returns the resulting state.
 %%
-%% returns the updated `average()'
--spec update(average_effect(), average()) -> {ok, average()}.
+%% The executable `effect_update()` operations for this data type are:
+%% - `{add, sum()}`
+%% - `{add, average()}`
+-spec update(effect_update(), average()) -> {ok, average()}.
 update({add, {_, 0}}, Average) ->
     {ok, Average};
 update({add, {Value, N}}, Average) when is_integer(Value), is_integer(N), N > 0 ->
@@ -88,47 +93,48 @@ update({add, {Value, N}}, Average) when is_integer(Value), is_integer(N), N > 0 
 update({add, Value}, Average) when is_integer(Value) ->
     {ok, add(Value, 1, Average)}.
 
-%% @doc Compare if two `average()' are equal. Only returns `true()' if both
-%% the sum of values and the number of values are equal.
+%% Compares the two given `average()` states.
 -spec equal(average(), average()) -> boolean().
 equal({Value1, N1}, {Value2, N2}) ->
     Value1 =:= Value2 andalso N1 =:= N2.
 
+%% Converts the given `average()` state into an Erlang `binary()`.
 -spec to_binary(average()) -> binary().
 to_binary(Average) ->
     term_to_binary(Average).
 
+%% Converts a given Erlang `binary()` into an `average()`.
+-spec from_binary(binary()) -> {ok, average()}.
 from_binary(Bin) ->
-    %% @TODO something smarter
     {ok, binary_to_term(Bin)}.
 
-%% @doc The following operation verifies
-%%      that Operation is supported by this particular CCRDT.
--spec is_operation(term()) -> boolean().
+%% Checks if the given `prepare_update()` is supported by the `average()`.
+-spec is_operation(any()) -> boolean().
 is_operation({add, {Value, N}}) when is_integer(Value), is_integer(N) -> true;
 is_operation({add, Value}) when is_integer(Value) -> true;
 is_operation(_) -> false.
 
-%% @doc Verifies if the operation is tagged as replicate or not.
-%%      This is used by the transaction buffer to only send replicate operations
-%%      to a subset of data centers.
--spec is_replicate_tagged(term()) -> boolean().
+%% Checks if the given `effect_update()` is tagged for replication.
+-spec is_replicate_tagged(effect_update()) -> boolean().
 is_replicate_tagged(_) -> false.
 
--spec can_compact(average_effect(), average_effect()) -> boolean().
+%% Checks if the given `effect_update()` operations can be compacted.
+-spec can_compact(effect_update(), effect_update()) -> boolean().
 can_compact({add, {_, _}}, {add, {_, _}}) -> true.
 
--spec compact_ops(average_effect(), average_effect()) -> {{noop}, average_effect()}.
+%% Compacts the given `effect_update()` operations.
+-spec compact_ops(effect_update(), effect_update()) -> {{noop}, effect_update()}.
 compact_ops({add, {V1, N1}}, {add, {V2, N2}}) -> {{noop}, {add, {V1 + V2, N1 + N2}}}.
 
-%% @doc Returns true if ?MODULE:downstream/2 needs the state of crdt
-%%      to generate downstream effect
-require_state_downstream(_) ->
-    false.
+%% Checks if the data type needs to know its current state to generate
+%% `update_effect()` operations.
+-spec require_state_downstream(any()) -> boolean().
+require_state_downstream(_) -> false.
 
+%%%% Private
 
-% Priv
--spec add(integer(), pos_integer(), average()) -> average().
+%% Adds `sum()` and `num()` to the current `average()`.
+-spec add(sum(), num(), average()) -> average().
 add(Value, N, {CurrentValue, CurrentN}) ->
     {CurrentValue + Value, CurrentN + N}.
 
@@ -137,15 +143,16 @@ add(Value, N, {CurrentValue, CurrentN}) ->
 %% ===================================================================
 -ifdef(TEST).
 
+%% Tests the `new/0` function.
 new_test() ->
     ?assertEqual({0, 0}, new()).
 
-%% @doc test the correctness of `value()' function
+%% Tests the `value/1` function.
 value_test() ->
     Average = {4, 5},
     ?assertEqual(4 / 5, value(Average)).
 
-%% @doc test the correctness of add with only 1 parameter.
+%% Tests the `effect_update()` with only a single parameter.
 update_add_test() ->
     Average0 = new(),
     {ok, Average1} = update({add, 1}, Average0),
@@ -153,18 +160,20 @@ update_add_test() ->
     {ok, Average3} = update({add, 1}, Average2),
     ?assertEqual(4 / 3, value(Average3)).
 
-%% @doc test the correctness of add using all parameters.
+%% Tests the `effect_update()` with both parameters.
 update_add_parameters_test() ->
     Average0 = new(),
     {ok, Average1} = update({add, {7, 2}}, Average0),
     ?assertEqual(7 / 2, value(Average1)).
 
+%% Tests the `effect_update()` with negative parameters.
 update_negative_params_test() ->
     Average0 = new(),
     {ok, Average1} = update({add, -7}, Average0),
     {ok, Average2} = update({add, {-5, 5}}, Average1),
     ?assertEqual(-12 / 6, value(Average2)).
 
+%% Tests the `equal/2` function.
 equal_test() ->
     Average1 = {4, 1},
     Average2 = {4, 2},
@@ -172,6 +181,7 @@ equal_test() ->
     ?assertNot(equal(Average1, Average2)),
     ?assert(equal(Average2, Average3)).
 
+%% Tests the `to_binary/1` and `from_binary/1` functions.
 binary_test() ->
     Average1 = {4, 1},
     BinaryAverage1 = to_binary(Average1),
