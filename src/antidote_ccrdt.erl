@@ -31,9 +31,10 @@
                ]).
 -define(PARTIALLY_INCREMENTAL, [antidote_ccrdt_topk_rmv]).
 
--export([is_type/1,
-         is_partially_incremental/1
-        ]).
+-export([
+    is_type/1,
+    generates_extra_operations/1
+]).
 
 -callback new() -> ccrdt().
 -callback value(ccrdt()) -> value().
@@ -52,7 +53,7 @@
 is_type(Type) ->
     is_atom(Type) andalso lists:member(Type, ?CCRDTS).
 
-is_partially_incremental(Type) ->
+generates_extra_operations(Type) ->
     is_type(Type) andalso lists:member(Type, ?PARTIALLY_INCREMENTAL).
 
 %% End of Module.
