@@ -29,7 +29,7 @@
                 antidote_ccrdt_topk,
                 antidote_ccrdt_topk_rmv
                ]).
--define(PARTIALLY_INCREMENTAL, [antidote_ccrdt_topk_rmv]).
+-define(CAN_GENERATE_EXTRA_OPS, [antidote_ccrdt_topk_rmv]).
 
 -export([
     is_type/1,
@@ -54,6 +54,6 @@ is_type(Type) ->
     is_atom(Type) andalso lists:member(Type, ?CCRDTS).
 
 generates_extra_operations(Type) ->
-    is_type(Type) andalso lists:member(Type, ?PARTIALLY_INCREMENTAL).
+    is_type(Type) andalso lists:member(Type, ?CAN_GENERATE_EXTRA_OPS).
 
 %% End of Module.
