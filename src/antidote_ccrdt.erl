@@ -32,7 +32,7 @@
     antidote_ccrdt_leaderboard
 ]).
 
--define(PARTIALLY_INCREMENTAL, [
+-define(CAN_GENERATE_EXTRA_OPS, [
     antidote_ccrdt_topk_rmv,
     antidote_ccrdt_leaderboard
 ]).
@@ -60,6 +60,6 @@ is_type(Type) ->
     is_atom(Type) andalso lists:member(Type, ?CCRDTS).
 
 generates_extra_operations(Type) ->
-    is_type(Type) andalso lists:member(Type, ?PARTIALLY_INCREMENTAL).
+    is_type(Type) andalso lists:member(Type, ?CAN_GENERATE_EXTRA_OPS).
 
 %% End of Module.
