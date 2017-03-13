@@ -14,5 +14,3 @@ branches:
   except:
     - metrics
     - benchmarks
-notifications:
-  webhooks: https://discordapp.com/api/webhooks/290937576586739712/xW2LspB3uglPkmrX5EXQrt-sszimngua5hmwt3UsmWSnNME-i1IZh4znqw2ri9VjKVMw
